@@ -4,6 +4,7 @@ import os
 import asyncio
 import datetime
 import pickle
+import traceback
 from pathlib import Path
 from rich.console import Console
 from rich.prompt import Prompt, Confirm
@@ -138,7 +139,6 @@ def init(source: str, github: bool, project: str = None):
                 
             except Exception as e:
                 console.print(f"[bold red]Error in async operation: {str(e)}[/]")
-                import traceback
                 traceback.print_exc()
                 raise
         
@@ -148,7 +148,6 @@ def init(source: str, github: bool, project: str = None):
         
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
-        import traceback
         traceback.print_exc()
         exit(1)
 
@@ -273,7 +272,6 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
                     
             except Exception as e:
                 console.print(f"[bold red]Error generating response: {str(e)}[/]")
-                import traceback
                 traceback.print_exc()
         
         if interactive:
@@ -295,7 +293,6 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
         console.print("\n[yellow]Goodbye![/]")
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
-        import traceback
         traceback.print_exc()
         exit(1)
 
@@ -312,7 +309,6 @@ def reset_history():
         console.print("[bold green]✓ Conversation history reset successfully![/]")
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
-        import traceback
         traceback.print_exc()
         exit(1)
 
@@ -366,7 +362,6 @@ def create_project(project_name: str):
         
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
-        import traceback
         traceback.print_exc()
         exit(1)
 
@@ -426,7 +421,6 @@ def list_projects():
             
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
-        import traceback
         traceback.print_exc()
 
 @cli.command()
@@ -479,7 +473,6 @@ def debug_projects():
                 
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
-        import traceback
         traceback.print_exc()
 
 @cli.command()
@@ -512,7 +505,6 @@ def switch_project(project_name: str):
         
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
-        import traceback
         traceback.print_exc()
         exit(1)
 

@@ -1,5 +1,5 @@
 # analyzer.py
-from typing import List, Dict
+from typing import List, Dict, Optional, Tuple
 import faiss
 import numpy as np
 from pathlib import Path
@@ -12,8 +12,180 @@ from rich.progress import Progress, TextColumn, BarColumn, TaskID, TimeRemaining
 from rich.console import Console
 import re
 import yaml
+import ast
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.table import Table
+from rich import box
 
 console = Console()
+
+class CodeStructure:
+    """Helper class to track code structure and context"""
+    def __init__(self):
+        self.imports = []
+        self.classes = {}  # class_name -> {methods: [], attributes: []}
+        self.functions = []
+        self.global_vars = []
+        self.docstrings = {}  # node -> docstring
+        self.comments = []
+        
+    def add_import(self, import_stmt: str):
+        self.imports.append(import_stmt.strip())
+        
+    def add_class(self, class_name: str, methods: List[str], attributes: List[str]):
+        self.classes[class_name] = {"methods": methods, "attributes": attributes}
+        
+    def add_function(self, func_name: str):
+        self.functions.append(func_name)
+        
+    def add_global(self, var_name: str):
+        self.global_vars.append(var_name)
+        
+    def add_docstring(self, node: ast.AST, docstring: str):
+        self.docstrings[node] = docstring.strip()
+        
+    def add_comment(self, comment: str):
+        self.comments.append(comment.strip())
+
+def extract_code_structure(content: str) -> CodeStructure:
+    """Extract structural information from Python code"""
+    structure = CodeStructure()
+    
+    try:
+        # Parse the AST
+        tree = ast.parse(content)
+        
+        # Extract docstrings and comments
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Module)):
+                docstring = ast.get_docstring(node)
+                if docstring:
+                    structure.add_docstring(node, docstring)
+        
+        # Extract comments using regex (since they're not in AST)
+        comment_pattern = r'#.*$'
+        for line in content.split('\n'):
+            comment_match = re.search(comment_pattern, line)
+            if comment_match:
+                structure.add_comment(comment_match.group())
+        
+        # Process each node in the AST
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for name in node.names:
+                    structure.add_import(name.name)
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ''
+                for name in node.names:
+                    import_stmt = f"from {module} import {name.name}"
+                    structure.add_import(import_stmt)
+            elif isinstance(node, ast.ClassDef):
+                methods = []
+                attributes = []
+                
+                # Extract methods and attributes
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef):
+                        methods.append(item.name)
+                    elif isinstance(item, ast.Assign):
+                        for target in item.targets:
+                            if isinstance(target, ast.Name):
+                                attributes.append(target.id)
+                
+                structure.add_class(node.name, methods, attributes)
+            elif isinstance(node, ast.FunctionDef):
+                structure.add_function(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        structure.add_global(target.id)
+                        
+        return structure
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not parse code structure: {str(e)}[/]")
+        return structure
+
+def get_context_window(content: List[str], current_line: int, window_size: int = 3) -> List[str]:
+    """Get surrounding context lines"""
+    start = max(0, current_line - window_size)
+    end = min(len(content), current_line + window_size + 1)
+    return content[start:end]
+
+def format_chunk_with_context(chunk_lines: List[str], structure: CodeStructure, 
+                            start_line: int, file_path: str) -> str:
+    """Format a chunk with its structural context using markdown-style formatting"""
+    # Start with file information as a header
+    lines = [f"# {file_path}\n"]
+    
+    # Add relevant imports in a code block
+    if structure.imports:
+        lines.append("## Imports\n```python")
+        lines.extend(structure.imports[:5])  # Show first 5 imports
+        lines.append("```\n")
+        
+    # Add class context if chunk is part of a class
+    class_context = []
+    for class_name, details in structure.classes.items():
+        if any(class_name in line for line in chunk_lines):
+            class_context.append(f"## Class `{class_name}`")
+            if details['methods']:
+                class_context.append("### Methods")
+                methods = [f"`{m}`" for m in details['methods']]
+                class_context.append(", ".join(methods))
+            if details['attributes']:
+                class_context.append("### Attributes")
+                attrs = [f"`{a}`" for a in details['attributes']]
+                class_context.append(", ".join(attrs))
+            class_context.append("")  # Add blank line
+    lines.extend(class_context)
+    
+    # Add function context
+    func_context = []
+    functions = [func_name for func_name in structure.functions 
+                if any(func_name in line for line in chunk_lines)]
+    if functions:
+        func_context.append("## Functions")
+        funcs = [f"`{f}`" for f in functions]
+        func_context.append(", ".join(funcs))
+        func_context.append("")  # Add blank line
+    lines.extend(func_context)
+    
+    # Add relevant docstrings in blockquotes
+    docstrings = [doc for doc in structure.docstrings.values() if any(
+        line.strip() in ''.join(chunk_lines) for line in doc.split('\n')
+    )]
+    if docstrings:
+        lines.append("## Documentation")
+        for doc in docstrings[:2]:  # Show first 2 relevant docstrings
+            # Format docstring as markdown blockquote
+            doc_lines = doc.split('\n')
+            formatted_doc = '\n'.join(f"> {line}" if line.strip() else ">" for line in doc_lines)
+            lines.append(formatted_doc)
+        lines.append("")  # Add blank line
+    
+    # Add the actual code chunk with line numbers in a code block
+    lines.append("## Code\n```python")
+    # Add a header row for line numbers
+    lines.append("# Line | Code")
+    lines.append("# ---- | ----")
+    for i, line in enumerate(chunk_lines, start=start_line):
+        # Escape any backticks in the code to prevent markdown formatting issues
+        escaped_line = line.rstrip().replace("`", "\\`")
+        # Right-align line numbers and add a monospace format
+        lines.append(f"# {i:4d} | {escaped_line}")
+    lines.append("```")
+    
+    # Add any inline comments as a separate section
+    comments = [comment for comment in structure.comments 
+               if any(comment in line for line in chunk_lines)]
+    if comments:
+        lines.append("\n## Comments")
+        for comment in comments:
+            lines.append(f"* {comment}")
+    
+    return "\n".join(lines)
 
 class CodebaseAnalyzer:
     def __init__(self, path: str, together_api_key: str, project_name: str = None):
@@ -22,7 +194,10 @@ class CodebaseAnalyzer:
         self.faiss_index = None
         self.documents = []
         self.metadata = []
-        self.conversation_history = []  # Store conversation history
+        self.conversation_history = []
+        
+        # Initialize Rich console with markdown support
+        self.console = Console(force_terminal=True)
         
         # Initialize config with defaults
         self.config = {
@@ -275,13 +450,26 @@ class CodebaseAnalyzer:
             traceback.print_exc()
             raise
     
+    def _format_output(self, text: str):
+        """Format text using Rich's markdown renderer"""
+        # Create a markdown object
+        md = Markdown(text)
+        # Render in a nice panel
+        panel = Panel(
+            md,
+            title="Code Analysis",
+            border_style="blue",
+            box=box.ROUNDED
+        )
+        self.console.print(panel)
+
     async def query(self, question: str, chunk_count: int = None) -> str:
         """Query the codebase and get AI response"""
-        console.print(f"[bold blue]Querying:[/] {question}")
+        self.console.print(f"[bold blue]Querying:[/] {question}")
         
         try:
             # Get question embedding
-            console.print("[green]Generating embedding for query...[/]")
+            self.console.print("[green]Generating embedding for query...[/]")
             question_embedding = await self.ai_client.get_embeddings([question])
             question_vector = np.array(question_embedding).astype('float32')
             
@@ -290,43 +478,45 @@ class CodebaseAnalyzer:
             
             # Determine number of chunks to retrieve
             if not chunk_count:
-                # Default is 10, but scale based on codebase size
                 total_chunks = self.faiss_index.ntotal
-                chunk_count = min(max(10, total_chunks // 10), 20)  # Between 10-20 chunks
+                chunk_count = min(max(10, total_chunks // 10), 20)
                 
-                # Adjust based on question complexity
                 if any(term in question.lower() for term in ["overall", "entire", "all", "architecture", "structure"]):
-                    chunk_count = min(chunk_count * 2, 30)  # More chunks for broad questions
+                    chunk_count = min(chunk_count * 2, 30)
             
-            console.print(f"[green]Searching for top {chunk_count} relevant code chunks...[/]")
-            D, I = self.faiss_index.search(question_vector, chunk_count)
+            with self.console.status("[bold green]Searching codebase...", spinner="dots"):
+                D, I = self.faiss_index.search(question_vector, chunk_count)
             
             # Prepare context from results + keyword results
-            console.print("[green]Preparing context from results...[/]")
-            context = self._prepare_context(I[0], keyword_files)
-            console.print(f"[dim]Using {len(I[0])} relevant code chunks as context[/]")
+            with self.console.status("[bold green]Preparing context...", spinner="dots"):
+                context = self._prepare_context(I[0], keyword_files)
             
             # Prepare conversation history
             history_context = ""
             if self.conversation_history:
-                console.print(f"[green]Including {len(self.conversation_history)} previous exchanges in context[/]")
-                history_context = self._prepare_conversation_history()
+                with self.console.status("[bold green]Including conversation history...", spinner="dots"):
+                    history_context = self._prepare_conversation_history()
             
             # Get AI response
-            console.print("[green]Generating AI response...[/]")
-            response = await self.ai_client.get_completion(question, context, history_context)
+            with self.console.status("[bold green]Generating response...", spinner="dots"):
+                response = await self.ai_client.get_completion(question, context, history_context)
             
-            # Update conversation history - store before saving
+            # Update conversation history
             self.conversation_history.append({"question": question, "answer": response})
-            if len(self.conversation_history) > 5:  # Keep last 5 interactions
+            if len(self.conversation_history) > 5:
                 self.conversation_history.pop(0)
             
-            # Save state to persist conversation history
-            self.save_state()
+            # Save state
+            with self.console.status("[bold green]Saving state...", spinner="dots"):
+                self.save_state()
+            
+            # Format and display the response
+            self._format_output(response)
             
             return response
+            
         except Exception as e:
-            console.print(f"[bold red]Error during query: {str(e)}[/]")
+            self.console.print(f"[bold red]Error during query:[/] {str(e)}")
             traceback.print_exc()
             raise
     
@@ -336,21 +526,22 @@ class CodebaseAnalyzer:
             state = {
                 'documents': self.documents,
                 'metadata': self.metadata,
-                'conversation_history': self.conversation_history  # Save conversation history
+                'conversation_history': self.conversation_history
             }
             
             # Save FAISS index
             index_file = str(self.project_dir / "code.index")
             faiss.write_index(self.faiss_index, index_file)
-            console.print(f"[green]FAISS index saved to {index_file}[/]")
+            self.console.print("[green]✓[/] FAISS index saved")
             
             # Save documents and metadata
             state_file = self.project_dir / "state.pkl"
             with open(state_file, 'wb') as f:
                 pickle.dump(state, f)
-            console.print(f"[green]Metadata and conversation history saved to {state_file}[/]")
+            self.console.print("[green]✓[/] Metadata and history saved")
+            
         except Exception as e:
-            console.print(f"[bold red]Error saving state: {str(e)}[/]")
+            self.console.print(f"[bold red]Error saving state:[/] {str(e)}")
             traceback.print_exc()
             raise
     
@@ -422,32 +613,48 @@ class CodebaseAnalyzer:
     
     def _prepare_context(self, indices, keyword_indices=None) -> str:
         """Prepare context from search results"""
-        # Combine semantic and keyword search results
         all_indices = list(indices)
         if keyword_indices:
             all_indices.extend(keyword_indices)
-            all_indices = list(set(all_indices))  # Deduplicate
+            all_indices = list(set(all_indices))
             
-        context_parts = []
+        # Create a table for file overview
+        table = Table(title="Files Referenced", box=box.ROUNDED)
+        table.add_column("File", style="cyan")
+        table.add_column("Lines", style="green")
         
-        # First gather all filenames for better navigation
+        context_parts = []
         filenames = set()
+        
         for idx in all_indices:
             if idx < len(self.metadata):
-                filenames.add(self.metadata[idx]['file'])
-                
-        # Add file overview section
+                meta = self.metadata[idx]
+                filenames.add(meta['file'])
+                table.add_row(
+                    meta['file'],
+                    f"{meta['start_line']}-{meta['end_line']}"
+                )
+        
         if filenames:
-            context_parts.append(f"Files referenced: {', '.join(sorted(filenames))}\n")
+            self.console.print(table)
             
-        # Then add actual code chunks
+        # Add code chunks with syntax highlighting
         for idx in all_indices:
             if idx < len(self.documents):
                 doc = self.documents[idx]
-                metadata = self.metadata[idx]
+                meta = self.metadata[idx]
+                
+                # Create syntax highlighted code
+                syntax = Syntax(
+                    doc,
+                    "python",
+                    line_numbers=True,
+                    start_line=meta['start_line']
+                )
+                
                 context_parts.append(
-                    f"File: {metadata['file']}\n"
-                    f"Lines {metadata['start_line']}-{metadata['end_line']}:\n"
+                    f"File: {meta['file']}\n"
+                    f"Lines {meta['start_line']}-{meta['end_line']}:\n"
                     f"{doc}\n"
                 )
         
@@ -504,12 +711,15 @@ class CodebaseAnalyzer:
         return is_indexable
     
     def _chunk_file(self, file_path: Path) -> List[Dict]:
-        """Split file into chunks with overlap"""
+        """Split file into chunks with intelligent parsing and context"""
         try:
-            total_lines = sum(1 for _ in open(file_path, 'r', encoding='utf-8'))
-            
+            # Read the entire file
             with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.readlines()
+                content = f.read()
+                lines = content.splitlines(keepends=True)
+            
+            # Extract code structure
+            structure = extract_code_structure(content)
             
             chunks = []
             chunk_size = self.config.get('chunk_size', 20)
@@ -518,20 +728,36 @@ class CodebaseAnalyzer:
             with Progress() as progress:
                 task = progress.add_task(
                     f"[green]Chunking {file_path.name}...", 
-                    total=total_lines
+                    total=len(lines)
                 )
                 
-                for i in range(0, len(content), chunk_size - overlap):
-                    chunk_lines = content[i:i + chunk_size]
+                current_line = 1
+                for i in range(0, len(lines), chunk_size - overlap):
+                    chunk_lines = lines[i:i + chunk_size]
                     if chunk_lines:
+                        # Get the chunk with context
+                        chunk_text = format_chunk_with_context(
+                            chunk_lines,
+                            structure,
+                            current_line,
+                            str(file_path.relative_to(self.path))
+                        )
+                        
                         chunks.append({
-                            "text": "".join(chunk_lines),
-                            "start_line": i + 1,
-                            "end_line": i + len(chunk_lines)
+                            "text": chunk_text,
+                            "start_line": current_line,
+                            "end_line": current_line + len(chunk_lines) - 1,
+                            "imports": structure.imports,
+                            "classes": list(structure.classes.keys()),
+                            "functions": structure.functions,
+                            "has_docstring": bool(structure.docstrings),
+                            "file_type": file_path.suffix
                         })
+                        current_line = current_line + (chunk_size - overlap)
                     progress.update(task, advance=len(chunk_lines))
-                
+            
             return chunks
         except Exception as e:
             console.print(f"[yellow]Warning: Could not process {file_path}: {str(e)}[/]")
+            traceback.print_exc()
             return []

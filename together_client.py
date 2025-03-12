@@ -97,7 +97,7 @@ class TogetherAIClient:
             # Better system prompt with explicit context maintenance instructions
             system_prompt = (
                 "You are a highly skilled AI assistant that helps developers understand, debug, and improve codebases. "
-                "Your primary role is to provide explanations, insights, and suggestions based on the provided code context. "
+                "Your primary role is to provide explanations, insights, and suggestions based on the provided code context and give line numbers when relevant. "
 
                 "Key Guidelines:\n"
                 "1. **Maintain Context Awareness:** Always refer to prior conversation history to ensure continuity and coherence. "
