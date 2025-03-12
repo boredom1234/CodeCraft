@@ -1,0 +1,10 @@
+together
+faiss-cpu
+click
+rich
+pyyaml
+python-dotenv
+numpy
+gitpython
+requests
+aiohttp 
