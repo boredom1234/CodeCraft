@@ -18,6 +18,12 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 from rich import box
+from rich.layout import Layout
+from rich.live import Live
+from rich.style import Style
+from rich.text import Text
+from rich.columns import Columns
+from rich.console import Group
 
 console = Console()
 
@@ -49,62 +55,118 @@ class CodeStructure:
     def add_comment(self, comment: str):
         self.comments.append(comment.strip())
 
-def extract_code_structure(content: str) -> CodeStructure:
-    """Extract structural information from Python code"""
+def extract_code_structure(content: str, file_type: str = 'py') -> CodeStructure:
+    """Extract structural information from code with language-specific parsing"""
     structure = CodeStructure()
     
     try:
-        # Parse the AST
-        tree = ast.parse(content)
+        if file_type == 'py':
+            # Python-specific parsing using ast
+            tree = ast.parse(content)
+            
+            # Extract docstrings and comments
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Module)):
+                    docstring = ast.get_docstring(node)
+                    if docstring:
+                        structure.add_docstring(node, docstring)
+            
+            # Process each node in the AST
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for name in node.names:
+                        structure.add_import(name.name)
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ''
+                    for name in node.names:
+                        import_stmt = f"from {module} import {name.name}"
+                        structure.add_import(import_stmt)
+                elif isinstance(node, ast.ClassDef):
+                    methods = []
+                    attributes = []
+                    
+                    for item in node.body:
+                        if isinstance(item, ast.FunctionDef):
+                            methods.append(item.name)
+                        elif isinstance(item, ast.Assign):
+                            for target in item.targets:
+                                if isinstance(target, ast.Name):
+                                    attributes.append(target.id)
+                    
+                    structure.add_class(node.name, methods, attributes)
+                elif isinstance(node, ast.FunctionDef):
+                    structure.add_function(node.name)
+                elif isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            structure.add_global(target.id)
         
-        # Extract docstrings and comments
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Module)):
-                docstring = ast.get_docstring(node)
-                if docstring:
-                    structure.add_docstring(node, docstring)
+        elif file_type in ['go', 'js', 'ts', 'jsx', 'tsx']:
+            # Generic parsing for other languages using regex
+            # Extract imports
+            import_patterns = {
+                'go': r'import\s+(?:\(\s*|\s*)([^)]+)',
+                'js': r'(?:import\s+.*?from\s+[\'"].*?[\'"]|require\s*\([\'"].*?[\'"]\))',
+                'ts': r'import\s+.*?from\s+[\'"].*?[\'"]',
+            }
+            
+            if file_type in import_patterns:
+                pattern = import_patterns[file_type]
+                imports = re.findall(pattern, content, re.MULTILINE | re.DOTALL)
+                for imp in imports:
+                    structure.add_import(imp.strip())
+            
+            # Extract functions
+            func_patterns = {
+                'go': r'func\s+(\w+)',
+                'js': r'(?:function\s+(\w+)|const\s+(\w+)\s*=\s*(?:async\s*)?function)',
+                'ts': r'(?:function\s+(\w+)|const\s+(\w+)\s*=\s*(?:async\s*)?function)',
+            }
+            
+            if file_type in func_patterns:
+                pattern = func_patterns[file_type]
+                functions = re.findall(pattern, content)
+                for func in functions:
+                    if isinstance(func, tuple):
+                        func = next((f for f in func if f), '')
+                    structure.add_function(func.strip())
+            
+            # Extract classes
+            class_patterns = {
+                'go': r'type\s+(\w+)\s+struct',
+                'js': r'class\s+(\w+)',
+                'ts': r'class\s+(\w+)',
+            }
+            
+            if file_type in class_patterns:
+                pattern = class_patterns[file_type]
+                classes = re.findall(pattern, content)
+                for class_name in classes:
+                    # Try to find methods within class scope
+                    if file_type == 'go':
+                        method_pattern = rf'func\s+\(\w+\s+\*?{class_name}\)\s+(\w+)'
+                    else:
+                        method_pattern = rf'(?:async\s+)?(\w+)\s*\([^)]*\)\s*{{[^}}]*}}'
+                    
+                    methods = re.findall(method_pattern, content)
+                    structure.add_class(class_name, methods, [])
         
-        # Extract comments using regex (since they're not in AST)
-        comment_pattern = r'#.*$'
-        for line in content.split('\n'):
-            comment_match = re.search(comment_pattern, line)
-            if comment_match:
-                structure.add_comment(comment_match.group())
+        # Extract comments (works for most languages)
+        comment_patterns = [
+            r'//.*$',           # Single line comments
+            r'/\*[\s\S]*?\*/',  # Multi-line comments
+            r'#.*$',            # Python/Shell style comments
+        ]
         
-        # Process each node in the AST
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for name in node.names:
-                    structure.add_import(name.name)
-            elif isinstance(node, ast.ImportFrom):
-                module = node.module or ''
-                for name in node.names:
-                    import_stmt = f"from {module} import {name.name}"
-                    structure.add_import(import_stmt)
-            elif isinstance(node, ast.ClassDef):
-                methods = []
-                attributes = []
-                
-                # Extract methods and attributes
-                for item in node.body:
-                    if isinstance(item, ast.FunctionDef):
-                        methods.append(item.name)
-                    elif isinstance(item, ast.Assign):
-                        for target in item.targets:
-                            if isinstance(target, ast.Name):
-                                attributes.append(target.id)
-                
-                structure.add_class(node.name, methods, attributes)
-            elif isinstance(node, ast.FunctionDef):
-                structure.add_function(node.name)
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        structure.add_global(target.id)
-                        
+        for pattern in comment_patterns:
+            comments = re.findall(pattern, content, re.MULTILINE)
+            for comment in comments:
+                structure.add_comment(comment.strip())
+        
         return structure
+        
     except Exception as e:
-        console.print(f"[yellow]Warning: Could not parse code structure: {str(e)}[/]")
+        console.print(f"[yellow]Warning: Could not fully parse code structure: {str(e)}[/]")
         return structure
 
 def get_context_window(content: List[str], current_line: int, window_size: int = 3) -> List[str]:
@@ -196,8 +258,8 @@ class CodebaseAnalyzer:
         self.metadata = []
         self.conversation_history = []
         
-        # Initialize Rich console with markdown support
-        self.console = Console(force_terminal=True)
+        # Initialize Rich console with markdown support and force color
+        self.console = Console(force_terminal=True, color_system="truecolor")
         
         # Initialize config with defaults
         self.config = {
@@ -245,6 +307,14 @@ class CodebaseAnalyzer:
                         self.config.update(project_config)
             except Exception as e:
                 console.print(f"[yellow]Warning: Could not load project config: {str(e)}[/]")
+        
+        # Create a layout for better organization
+        self.layout = Layout()
+        self.layout.split_column(
+            Layout(name="header"),
+            Layout(name="main", ratio=8),
+            Layout(name="footer")
+        )
     
     @classmethod
     async def from_github(cls, github_url: str, api_key: str, project_name: str = None):
@@ -450,73 +520,126 @@ class CodebaseAnalyzer:
             traceback.print_exc()
             raise
     
-    def _format_output(self, text: str):
-        """Format text using Rich's markdown renderer"""
-        # Create a markdown object
-        md = Markdown(text)
-        # Render in a nice panel
-        panel = Panel(
-            md,
-            title="Code Analysis",
+    def _create_header(self, title: str) -> Panel:
+        """Create a styled header panel"""
+        return Panel(
+            Text(title, style="bold blue", justify="center"),
+            box=box.ROUNDED,
             border_style="blue",
-            box=box.ROUNDED
+            padding=(1, 2)
         )
-        self.console.print(panel)
 
-    async def query(self, question: str, chunk_count: int = None) -> str:
-        """Query the codebase and get AI response"""
-        self.console.print(f"[bold blue]Querying:[/] {question}")
-        
+    def _create_footer(self, text: str) -> Panel:
+        """Create a styled footer panel"""
+        return Panel(
+            Text(text, style="dim", justify="center"),
+            box=box.ROUNDED,
+            border_style="blue",
+            padding=(1, 2)
+        )
+
+    def _format_output(self, text: str, title: str = "Code Analysis"):
+        """Format text using Rich's markdown renderer with enhanced layout"""
         try:
-            # Get question embedding
-            self.console.print("[green]Generating embedding for query...[/]")
-            question_embedding = await self.ai_client.get_embeddings([question])
-            question_vector = np.array(question_embedding).astype('float32')
+            # Create header
+            header = self._create_header(title)
             
-            # Add keyword search for filenames
-            keyword_files = self._keyword_search(question)
+            # Create main content
+            md = Markdown(text)
+            main_panel = Panel(
+                md,
+                border_style="blue",
+                box=box.ROUNDED,
+                padding=(1, 2)
+            )
             
-            # Determine number of chunks to retrieve
-            if not chunk_count:
-                total_chunks = self.faiss_index.ntotal
-                chunk_count = min(max(10, total_chunks // 10), 20)
-                
-                if any(term in question.lower() for term in ["overall", "entire", "all", "architecture", "structure"]):
-                    chunk_count = min(chunk_count * 2, 30)
+            # Create footer with stats
+            footer_text = f"Project: {self.project_name} | Chunks: {len(self.documents)} | Files: {len(set(m['file'] for m in self.metadata))}"
+            footer = self._create_footer(footer_text)
             
-            with self.console.status("[bold green]Searching codebase...", spinner="dots"):
-                D, I = self.faiss_index.search(question_vector, chunk_count)
+            # Update layout
+            self.layout["header"].update(header)
+            self.layout["main"].update(main_panel)
+            self.layout["footer"].update(footer)
             
-            # Prepare context from results + keyword results
-            with self.console.status("[bold green]Preparing context...", spinner="dots"):
-                context = self._prepare_context(I[0], keyword_files)
-            
-            # Prepare conversation history
-            history_context = ""
-            if self.conversation_history:
-                with self.console.status("[bold green]Including conversation history...", spinner="dots"):
-                    history_context = self._prepare_conversation_history()
-            
-            # Get AI response
-            with self.console.status("[bold green]Generating response...", spinner="dots"):
-                response = await self.ai_client.get_completion(question, context, history_context)
-            
-            # Update conversation history
-            self.conversation_history.append({"question": question, "answer": response})
-            if len(self.conversation_history) > 5:
-                self.conversation_history.pop(0)
-            
-            # Save state
-            with self.console.status("[bold green]Saving state...", spinner="dots"):
-                self.save_state()
-            
-            # Format and display the response
-            self._format_output(response)
-            
-            return response
+            # Print the layout
+            self.console.print(self.layout)
             
         except Exception as e:
-            self.console.print(f"[bold red]Error during query:[/] {str(e)}")
+            self.console.print(f"[bold red]Error formatting output:[/] {str(e)}")
+
+    async def query(self, question: str, chunk_count: int = None) -> str:
+        """Query the codebase and get AI response with enhanced context"""
+        header = self._create_header("Code Query")
+        self.console.print(header)
+        
+        try:
+            with self.console.status("[bold green]Processing query...", spinner="dots") as status:
+                # Enhanced query preprocessing
+                query_context = self._analyze_query(question)
+                self.console.print(f"[dim]Query context: {query_context}[/]")
+                
+                # Get question embedding with enhanced context
+                status.update("[bold green]Generating embedding...")
+                enhanced_question = self._enhance_query_with_context(question, query_context)
+                self.console.print(f"[dim]Enhanced question: {enhanced_question}[/]")
+                question_embedding = await self.ai_client.get_embeddings([enhanced_question])
+                question_vector = np.array(question_embedding).astype('float32')
+                
+                # Smart chunk count determination
+                if not chunk_count:
+                    chunk_count = self._determine_optimal_chunk_count(question, query_context)
+                self.console.print(f"[dim]Using {chunk_count} chunks[/]")
+                
+                # Enhanced search with multiple strategies
+                status.update("[bold green]Searching codebase...")
+                relevant_chunks = await self._enhanced_search(
+                    question_vector,
+                    chunk_count,
+                    query_context
+                )
+                
+                # Debug print metadata of found chunks
+                self.console.print("[dim]Found chunks:[/]")
+                for idx in relevant_chunks:
+                    if idx < len(self.metadata):
+                        meta = self.metadata[idx]
+                        self.console.print(f"[dim]  - {meta['file']} (lines {meta['start_line']}-{meta['end_line']})[/]")
+                
+                # Prepare enhanced context
+                status.update("[bold green]Preparing context...")
+                context = self._prepare_enhanced_context(relevant_chunks, query_context)
+                
+                # Include relevant conversation history
+                history_context = ""
+                if self.conversation_history:
+                    status.update("[bold green]Including conversation history...")
+                    history_context = self._prepare_filtered_history(question, query_context)
+                
+                # Generate response with enhanced prompt
+                status.update("[bold green]Generating response...")
+                response = await self._generate_enhanced_response(
+                    question,
+                    context,
+                    history_context,
+                    query_context
+                )
+                
+                # Update conversation history with context
+                self._update_conversation_history(question, response, query_context)
+                
+                # Format and display the response
+                self._format_output(response, title="AI Response")
+                
+                return response
+                
+        except Exception as e:
+            self.console.print(Panel(
+                Text(f"Error: {str(e)}", style="bold red"),
+                title="Error",
+                border_style="red",
+                box=box.ROUNDED
+            ))
             traceback.print_exc()
             raise
     
@@ -611,54 +734,65 @@ class CodebaseAnalyzer:
         
         return list(set(matches))  # Deduplicate
     
-    def _prepare_context(self, indices, keyword_indices=None) -> str:
-        """Prepare context from search results"""
-        all_indices = list(indices)
-        if keyword_indices:
-            all_indices.extend(keyword_indices)
-            all_indices = list(set(all_indices))
-            
-        # Create a table for file overview
-        table = Table(title="Files Referenced", box=box.ROUNDED)
-        table.add_column("File", style="cyan")
-        table.add_column("Lines", style="green")
-        
+    def _prepare_enhanced_context(self, relevant_chunks: List[int], query_context: Dict) -> str:
+        """Prepare enhanced context from relevant chunks"""
         context_parts = []
-        filenames = set()
-        
-        for idx in all_indices:
-            if idx < len(self.metadata):
-                meta = self.metadata[idx]
-                filenames.add(meta['file'])
-                table.add_row(
-                    meta['file'],
-                    f"{meta['start_line']}-{meta['end_line']}"
-                )
-        
-        if filenames:
-            self.console.print(table)
-            
-        # Add code chunks with syntax highlighting
-        for idx in all_indices:
+        for idx in relevant_chunks:
             if idx < len(self.documents):
                 doc = self.documents[idx]
                 meta = self.metadata[idx]
                 
-                # Create syntax highlighted code
-                syntax = Syntax(
-                    doc,
-                    "python",
-                    line_numbers=True,
-                    start_line=meta['start_line']
-                )
+                # Add file information
+                context_parts.append(f"File: {meta['file']}")
+                context_parts.append(f"Lines {meta['start_line']}-{meta['end_line']}")
                 
-                context_parts.append(
-                    f"File: {meta['file']}\n"
-                    f"Lines {meta['start_line']}-{meta['end_line']}:\n"
-                    f"{doc}\n"
-                )
+                # Add the actual code content
+                context_parts.append("```" + meta['file'].split('.')[-1])
+                context_parts.append(doc)
+                context_parts.append("```")
+                context_parts.append("")  # Empty line for separation
         
-        return "\n---\n".join(context_parts)
+        return "\n".join(context_parts)
+
+    def _prepare_context(self, indices, keyword_indices=None) -> str:
+        """Prepare context from search results"""
+        try:
+            all_indices = list(indices)
+            if keyword_indices:
+                all_indices.extend(keyword_indices)
+                all_indices = list(set(all_indices))
+            
+            context_parts = []
+            for idx in all_indices:
+                if idx < len(self.metadata):
+                    meta = self.metadata[idx]
+                    doc = self.documents[idx]
+                    
+                    # Add file information
+                    context_parts.append(f"File: {meta['file']}")
+                    context_parts.append(f"Lines {meta['start_line']}-{meta['end_line']}")
+                    
+                    # Add the actual code content
+                    context_parts.append("```" + meta['file'].split('.')[-1])
+                    context_parts.append(doc)
+                    context_parts.append("```")
+                    context_parts.append("")  # Empty line for separation
+            
+            return "\n".join(context_parts)
+            
+        except Exception as e:
+            # Fallback to basic context format
+            basic_parts = []
+            for idx in all_indices:
+                if idx < len(self.metadata):
+                    meta = self.metadata[idx]
+                    doc = self.documents[idx]
+                    basic_parts.append(
+                        f"File: {meta['file']}\n"
+                        f"Lines {meta['start_line']}-{meta['end_line']}:\n"
+                        f"{doc}\n"
+                    )
+            return "\n---\n".join(basic_parts)
     
     def _should_index_file(self, file_path: Path) -> bool:
         """Determine if file should be indexed"""
@@ -718,12 +852,86 @@ class CodebaseAnalyzer:
                 content = f.read()
                 lines = content.splitlines(keepends=True)
             
-            # Extract code structure
-            structure = extract_code_structure(content)
+            # Determine file type for language-specific parsing
+            file_type = file_path.suffix.lstrip('.')
+            
+            # Extract code structure with language-specific parsing
+            structure = extract_code_structure(content, file_type)
             
             chunks = []
             chunk_size = self.config.get('chunk_size', 20)
             overlap = self.config.get('overlap', 5)
+            
+            # Enhanced chunking with semantic boundaries
+            def find_semantic_boundary(lines: List[str], start: int, end: int, file_type: str) -> int:
+                """Find the best semantic boundary based on language-specific patterns"""
+                # Language-specific patterns with priorities
+                patterns = {
+                    'py': {
+                        'class ': 10,
+                        'def ': 9,
+                        'async def ': 9,
+                        '\n\n': 8,
+                        '    def ': 7,
+                        '    async def ': 7,
+                        'if __name__': 6,
+                        'return ': 5
+                    },
+                    'go': {
+                        'type ': 10,
+                        'func ': 9,
+                        '\n\n': 8,
+                        'struct {': 7,
+                        'interface {': 7,
+                        'return ': 5
+                    },
+                    'js': {
+                        'class ': 10,
+                        'function ': 9,
+                        'const ': 8,
+                        'let ': 8,
+                        'return ': 5
+                    },
+                    'ts': {
+                        'interface ': 10,
+                        'class ': 10,
+                        'function ': 9,
+                        'const ': 8,
+                        'let ': 8,
+                        'return ': 5
+                    }
+                }
+                
+                # Common patterns for all languages
+                common_patterns = {
+                    '}\n': 4,
+                    ']\n': 3,
+                    ')\n': 2,
+                    ';\n': 1
+                }
+                
+                # Get language-specific patterns or fall back to common ones
+                priority = patterns.get(file_type, {})
+                priority.update(common_patterns)
+                
+                best_score = -1
+                best_pos = end
+                
+                for i in range(start, end):
+                    line = lines[i]
+                    for pattern, score in priority.items():
+                        if line.strip().startswith(pattern) or line.endswith(pattern):
+                            if score > best_score:
+                                best_score = score
+                                best_pos = i
+                
+                return best_pos if best_score > -1 else end
+            
+            # Enhanced context tracking
+            context_stack = []
+            current_class = None
+            current_function = None
+            imports_section = []
             
             with Progress() as progress:
                 task = progress.add_task(
@@ -732,10 +940,48 @@ class CodebaseAnalyzer:
                 )
                 
                 current_line = 1
-                for i in range(0, len(lines), chunk_size - overlap):
-                    chunk_lines = lines[i:i + chunk_size]
+                i = 0
+                while i < len(lines):
+                    # Find semantic boundary for chunk end
+                    chunk_end = min(i + chunk_size, len(lines))
+                    semantic_end = find_semantic_boundary(lines, i + chunk_size - overlap, chunk_end, file_type)
+                    chunk_lines = lines[i:semantic_end]
+                    
                     if chunk_lines:
-                        # Get the chunk with context
+                        # Track context
+                        chunk_context = {
+                            'imports': [],
+                            'classes': [],
+                            'functions': [],
+                            'scope': [],
+                            'dependencies': set()
+                        }
+                        
+                        # Analyze chunk content
+                        chunk_content = ''.join(chunk_lines)
+                        try:
+                            tree = ast.parse(chunk_content)
+                            for node in ast.walk(tree):
+                                if isinstance(node, ast.Import):
+                                    for name in node.names:
+                                        chunk_context['imports'].append(name.name)
+                                        chunk_context['dependencies'].add(name.name)
+                                elif isinstance(node, ast.ImportFrom):
+                                    module = node.module or ''
+                                    for name in node.names:
+                                        import_stmt = f"from {module} import {name.name}"
+                                        chunk_context['imports'].append(import_stmt)
+                                        chunk_context['dependencies'].add(f"{module}.{name.name}")
+                                elif isinstance(node, ast.ClassDef):
+                                    chunk_context['classes'].append(node.name)
+                                    chunk_context['scope'].append(f"class {node.name}")
+                                elif isinstance(node, ast.FunctionDef):
+                                    chunk_context['functions'].append(node.name)
+                                    chunk_context['scope'].append(f"function {node.name}")
+                        except:
+                            pass  # Skip AST parsing if chunk is incomplete
+                        
+                        # Get the chunk with enhanced context
                         chunk_text = format_chunk_with_context(
                             chunk_lines,
                             structure,
@@ -743,21 +989,259 @@ class CodebaseAnalyzer:
                             str(file_path.relative_to(self.path))
                         )
                         
+                        # Add semantic metadata
                         chunks.append({
                             "text": chunk_text,
                             "start_line": current_line,
                             "end_line": current_line + len(chunk_lines) - 1,
-                            "imports": structure.imports,
-                            "classes": list(structure.classes.keys()),
-                            "functions": structure.functions,
+                            "imports": list(set(structure.imports + chunk_context['imports'])),
+                            "classes": list(set(list(structure.classes.keys()) + chunk_context['classes'])),
+                            "functions": list(set(structure.functions + chunk_context['functions'])),
                             "has_docstring": bool(structure.docstrings),
-                            "file_type": file_path.suffix
+                            "file_type": file_path.suffix,
+                            "scope": chunk_context['scope'],
+                            "dependencies": list(chunk_context['dependencies']),
+                            "semantic_context": {
+                                "parent_class": current_class,
+                                "parent_function": current_function,
+                                "is_method": bool(current_class and current_function),
+                                "is_nested": len(chunk_context['scope']) > 1
+                            }
                         })
-                        current_line = current_line + (chunk_size - overlap)
-                    progress.update(task, advance=len(chunk_lines))
+                        
+                        # Update line counter and progress
+                        current_line = current_line + len(chunk_lines)
+                        i = semantic_end
+                        progress.update(task, advance=len(chunk_lines))
+                    else:
+                        i += 1
             
             return chunks
+            
         except Exception as e:
             console.print(f"[yellow]Warning: Could not process {file_path}: {str(e)}[/]")
             traceback.print_exc()
             return []
+
+    def _analyze_query(self, question: str) -> Dict:
+        """Analyze query to extract semantic information"""
+        context = {
+            'type': 'general',
+            'focus': [],
+            'scope': [],
+            'keywords': set(),
+            'code_elements': {
+                'classes': set(),
+                'functions': set(),
+                'variables': set(),
+                'imports': set()
+            }
+        }
+        
+        # Identify query type
+        type_patterns = {
+            'explain': r'explain|how|what|why|describe',
+            'find': r'find|where|locate|search',
+            'modify': r'change|modify|update|fix',
+            'create': r'create|add|implement|make',
+            'error': r'error|bug|issue|problem|fail'
+        }
+        
+        for qtype, pattern in type_patterns.items():
+            if re.search(pattern, question.lower()):
+                context['type'] = qtype
+                break
+        
+        # Extract code elements
+        code_patterns = {
+            'classes': r'class\s+(\w+)',
+            'functions': r'def\s+(\w+)|function\s+(\w+)',
+            'variables': r'\b[a-z_][a-z0-9_]*\b',
+            'imports': r'import\s+(\w+)|from\s+(\w+)'
+        }
+        
+        for element_type, pattern in code_patterns.items():
+            matches = re.findall(pattern, question, re.IGNORECASE)
+            if matches:
+                context['code_elements'][element_type].update(
+                    m[0] if isinstance(m, tuple) else m for m in matches
+                )
+        
+        # Extract focus areas
+        focus_patterns = [
+            (r'in\s+(\w+[\w./]*)', 'file'),
+            (r'class\s+(\w+)', 'class'),
+            (r'function\s+(\w+)', 'function'),
+            (r'method\s+(\w+)', 'method')
+        ]
+        
+        for pattern, focus_type in focus_patterns:
+            matches = re.findall(pattern, question, re.IGNORECASE)
+            if matches:
+                context['focus'].extend((focus_type, m) for m in matches)
+        
+        return context
+
+    def _enhance_query_with_context(self, question: str, context: Dict) -> str:
+        """Enhance query with extracted context for better embedding"""
+        enhanced_parts = [question]
+        
+        # Add type-specific context
+        type_contexts = {
+            'explain': 'Explain and describe in detail',
+            'find': 'Search and locate specific elements',
+            'modify': 'Modify or update existing code',
+            'create': 'Create or implement new functionality',
+            'error': 'Debug and fix issues'
+        }
+        
+        if context['type'] in type_contexts:
+            enhanced_parts.append(type_contexts[context['type']])
+        
+        # Add code elements context
+        for element_type, elements in context['code_elements'].items():
+            if elements:
+                enhanced_parts.append(f"{element_type}: {', '.join(elements)}")
+        
+        # Add focus context
+        if context['focus']:
+            focus_str = ', '.join(f"{f_type} {f_name}" for f_type, f_name in context['focus'])
+            enhanced_parts.append(f"Focus on: {focus_str}")
+        
+        return ' | '.join(enhanced_parts)
+
+    async def _enhanced_search(self, query_vector: np.ndarray, chunk_count: int, 
+                             query_context: Dict) -> List[Dict]:
+        """Perform enhanced search using multiple strategies"""
+        # Get initial semantic search results
+        D, I = self.faiss_index.search(query_vector, chunk_count * 2)  # Get more candidates
+        
+        # Score and filter results
+        scored_results = []
+        for idx in I[0]:
+            if idx < len(self.metadata):
+                score = self._score_chunk_relevance(
+                    self.metadata[idx],
+                    self.documents[idx],
+                    query_context
+                )
+                scored_results.append((score, idx))
+        
+        # Sort by relevance score and take top chunks
+        scored_results.sort(reverse=True)
+        top_indices = [idx for _, idx in scored_results[:chunk_count]]
+        
+        return top_indices
+
+    def _score_chunk_relevance(self, metadata: Dict, content: str, 
+                             query_context: Dict) -> float:
+        """Score chunk relevance based on multiple factors"""
+        score = 0.0
+        
+        # Context match score
+        if query_context['focus']:
+            for focus_type, focus_name in query_context['focus']:
+                if focus_type == 'file' and focus_name in metadata['file']:
+                    score += 2.0
+                elif focus_type in ['class', 'function', 'method']:
+                    if focus_name in content:
+                        score += 1.5
+        
+        # Code elements match score
+        for element_type, elements in query_context['code_elements'].items():
+            for element in elements:
+                if element in content:
+                    score += 1.0
+        
+        # Scope relevance
+        if metadata.get('scope'):
+            scope_relevance = sum(
+                2.0 if any(f_name in s for _, f_name in query_context['focus'])
+                else 0.5
+                for s in metadata['scope']
+            )
+            score += scope_relevance
+        
+        # Dependency relevance
+        if metadata.get('dependencies'):
+            dep_relevance = sum(
+                1.0 if dep in query_context['code_elements']['imports']
+                else 0.5
+                for dep in metadata['dependencies']
+            )
+            score += dep_relevance
+        
+        return score
+
+    def _determine_optimal_chunk_count(self, question: str, context: Dict) -> int:
+        """Determine optimal number of chunks based on query complexity"""
+        base_count = 10
+        
+        # Adjust for query type
+        type_multipliers = {
+            'explain': 1.5,  # Need more context for explanations
+            'find': 1.0,     # Standard search
+            'modify': 1.2,   # Need surrounding context
+            'create': 1.3,   # Need examples and related code
+            'error': 1.4     # Need more context for debugging
+        }
+        
+        multiplier = type_multipliers.get(context['type'], 1.0)
+        
+        # Adjust for complexity
+        complexity_score = (
+            len(context['focus']) * 0.3 +
+            sum(len(elements) for elements in context['code_elements'].values()) * 0.2 +
+            (2.0 if any(term in question.lower() for term in 
+                       ["overall", "entire", "all", "architecture", "structure"]) else 0)
+        )
+        
+        chunk_count = int(base_count * multiplier * (1 + complexity_score))
+        return min(max(chunk_count, 5), 30)  # Keep within reasonable bounds
+
+    async def _generate_enhanced_response(self, question: str, context: str,
+                                       history_context: str, query_context: Dict) -> str:
+        """Generate response with enhanced prompt engineering"""
+        # Build enhanced prompt
+        prompt_parts = [
+            f"Question type: {query_context['type']}",
+            f"Focus areas: {', '.join(f'{t}: {n}' for t, n in query_context['focus'])}" if query_context['focus'] else "",
+            "Code elements mentioned:",
+            *[f"- {k}: {', '.join(v)}" for k, v in query_context['code_elements'].items() if v],
+            "\nQuestion:",
+            question,
+            "\nRelevant code context:",
+            context
+        ]
+        
+        if history_context:
+            prompt_parts.extend([
+                "\nRelevant conversation history:",
+                history_context
+            ])
+        
+        enhanced_prompt = "\n".join(filter(None, prompt_parts))
+        
+        # Generate response with enhanced prompt
+        return await self.ai_client.get_completion(
+            enhanced_prompt,
+            temperature=self.config.get('temperature', 0.7)
+        )
+
+    def _update_conversation_history(self, question: str, response: str, query_context: Dict):
+        """Update conversation history with context"""
+        self.conversation_history.append({
+            "question": question,
+            "answer": response,
+            "context": query_context
+        })
+        if len(self.conversation_history) > 5:
+            self.conversation_history.pop(0)
+
+    def _prepare_filtered_history(self, question: str, query_context: Dict) -> str:
+        """Prepare filtered conversation history for context"""
+        relevant_history = [
+            exchange for exchange in self.conversation_history
+            if any(term in exchange['question'].lower() for term in query_context['keywords'])
+        ]
+        return self._prepare_conversation_history()
