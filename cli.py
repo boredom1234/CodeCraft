@@ -6,12 +6,32 @@ import datetime
 import pickle
 from pathlib import Path
 from rich.console import Console
-from rich.prompt import Prompt
+from rich.prompt import Prompt, Confirm
 import yaml
 from dotenv import load_dotenv
 from analyzer import CodebaseAnalyzer
 
 console = Console()
+
+def validate_config(config: dict) -> dict:
+    """Validate and set defaults for configuration"""
+    defaults = {
+        "chunk_size": 20,
+        "overlap": 5,
+        "max_history": 5,
+        "temperature": 0.7,
+        "debug": False
+    }
+    
+    if not isinstance(config, dict):
+        config = {}
+    
+    # Merge with defaults
+    for key, value in defaults.items():
+        if key not in config:
+            config[key] = value
+            
+    return config
 
 def setup_together_api():
     """Setup Together AI API key"""
@@ -43,7 +63,10 @@ def setup_together_api():
     with open(env_file, "a") as f:
         f.write(f"\nTOGETHER_API_KEY={api_key}")
     
+    # Add config validation
     config = {"together_api_key": api_key}
+    config = validate_config(config)
+    
     with open(config_file, "w") as f:
         yaml.dump(config, f)
     
@@ -54,15 +77,29 @@ def cli():
     """Code Understanding Assistant powered by Together AI"""
     pass
 
+# Add a more robust error handling decorator
+def handle_cli_errors(f):
+    """Decorator to handle CLI command errors consistently"""
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Operation cancelled by user[/]")
+            exit(0)
+        except Exception as e:
+            console.print(f"[bold red]Error: {str(e)}[/]")
+            if os.getenv("DEBUG"):
+                traceback.print_exc()
+            exit(1)
+    return wrapper
+
+# Apply to CLI commands
 @cli.command()
+@handle_cli_errors
 def configure():
     """Configure API keys and settings"""
-    try:
-        api_key = setup_together_api()
-        console.print("[green]Configuration saved successfully![/]")
-    except Exception as e:
-        console.print(f"[red]Error during configuration: {str(e)}[/]")
-        exit(1)
+    api_key = setup_together_api()
+    console.print("[green]Configuration saved successfully![/]")
 
 @cli.command()
 @click.argument('source')
@@ -117,10 +154,11 @@ def init(source: str, github: bool, project: str = None):
 
 @cli.command()
 @click.option('--interactive', '-i', is_flag=True, help='Start interactive mode')
-@click.option('--chunks', '-c', type=int, help='Number of code chunks to use for context')
+@click.option('--composer', '-c', is_flag=True, help='Show suggested changes as diffs')
+@click.option('--chunks', type=int, help='Number of code chunks to use for context')
 @click.option('--reset', '-r', is_flag=True, help='Reset conversation history before starting')
 @click.option('--project', '-p', help='Project to use')
-def ask(interactive: bool, chunks: int = None, reset: bool = False, project: str = None):
+def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bool = False, project: str = None):
     """Ask questions about the codebase"""
     try:
         # Change to specified project if requested
@@ -143,11 +181,96 @@ def ask(interactive: bool, chunks: int = None, reset: bool = False, project: str
         async def handle_question(question: str):
             try:
                 with console.status("[bold yellow]Thinking...[/]"):
-                    response = await analyzer.query(question, chunks)
-                console.print(f"\n[bold blue]Answer:[/] {response}\n")
-                
-                # Save analyzer state to persist conversation history
-                save_analyzer_state(analyzer)
+                    if composer:
+                        # Get response in composer mode
+                        response = await analyzer.query(
+                            f"Act as a code composer. For the following request, show the exact changes needed using + for additions and - for removals: {question}",
+                            chunks
+                        )
+                        
+                        # Process response to highlight diffs
+                        lines = response.split('\n')
+                        formatted_lines = []
+                        in_code_block = False
+                        current_file = None
+                        changes = {}  # Store changes by file
+                        
+                        for line in lines:
+                            # Check for file markers in code blocks
+                            if line.strip().startswith('```python:'):
+                                in_code_block = True
+                                current_file = line.split(':', 1)[1].strip()
+                                changes[current_file] = {'additions': [], 'removals': []}
+                                formatted_lines.append(line)
+                            elif line.strip() == '```':
+                                in_code_block = False
+                                current_file = None
+                                formatted_lines.append(line)
+                            elif in_code_block and current_file:
+                                # Store changes for each file
+                                if line.startswith('+'):
+                                    changes[current_file]['additions'].append(line[1:].strip())
+                                    formatted_lines.append(f"[green]{line}[/]")
+                                elif line.startswith('-'):
+                                    changes[current_file]['removals'].append(line[1:].strip())
+                                    formatted_lines.append(f"[red]{line}[/]")
+                                else:
+                                    formatted_lines.append(line)
+                            else:
+                                formatted_lines.append(line)
+                        
+                        # Show the formatted response
+                        console.print(f"\n[bold blue]Proposed Changes:[/]")
+                        console.print('\n'.join(formatted_lines))
+                        
+                        # If we have changes, ask for confirmation
+                        if changes:
+                            console.print("\n[bold blue]Files to be modified:[/]")
+                            for file_path in changes.keys():
+                                console.print(f"  • {file_path}")
+                            
+                            if Confirm.ask("\n[bold yellow]Do you want to apply these changes?"):
+                                # Apply the changes
+                                for file_path, file_changes in changes.items():
+                                    try:
+                                        file_path = Path(file_path)
+                                        
+                                        # Create parent directories if they don't exist
+                                        file_path.parent.mkdir(parents=True, exist_ok=True)
+                                        
+                                        # Read existing content or create new file
+                                        content = []
+                                        if file_path.exists():
+                                            with open(file_path, 'r') as f:
+                                                content = f.readlines()
+                                        
+                                        # Remove lines that should be removed
+                                        content = [line for line in content 
+                                                 if line.strip() not in file_changes['removals']]
+                                        
+                                        # Add new lines
+                                        content.extend(line + '\n' for line in file_changes['additions'])
+                                        
+                                        # Write back the modified content
+                                        with open(file_path, 'w') as f:
+                                            f.writelines(content)
+                                        
+                                        console.print(f"[green]✓ Updated {file_path}[/]")
+                                        
+                                    except Exception as e:
+                                        console.print(f"[red]Error modifying {file_path}: {str(e)}[/]")
+                                
+                                console.print("[bold green]✓ Changes applied successfully![/]")
+                            else:
+                                console.print("[yellow]Changes rejected - no modifications made[/]")
+                    else:
+                        # Normal mode
+                        response = await analyzer.query(question, chunks)
+                        console.print(f"\n[bold blue]Answer:[/] {response}\n")
+                    
+                    # Save analyzer state to persist conversation history
+                    save_analyzer_state(analyzer)
+                    
             except Exception as e:
                 console.print(f"[bold red]Error generating response: {str(e)}[/]")
                 import traceback
@@ -155,6 +278,8 @@ def ask(interactive: bool, chunks: int = None, reset: bool = False, project: str
         
         if interactive:
             console.print("[bold yellow]Interactive mode (Ctrl+C to exit)[/]")
+            if composer:
+                console.print("[bold yellow]Composer mode enabled - showing changes as diffs[/]")
             console.print("[dim]Conversation history is maintained between questions[/]\n")
             try:
                 while True:
@@ -303,7 +428,6 @@ def list_projects():
         console.print(f"[bold red]Error: {str(e)}[/]")
         import traceback
         traceback.print_exc()
-        exit(1)
 
 @cli.command()
 def debug_projects():
@@ -391,6 +515,176 @@ def switch_project(project_name: str):
         import traceback
         traceback.print_exc()
         exit(1)
+
+@cli.command()
+@click.option('--format', '-f', type=click.Choice(['text', 'json']), default='text')
+def status():
+    """Show current project status and statistics"""
+    try:
+        analyzer = load_analyzer_state()
+        
+        stats = {
+            "project": analyzer.project_name,
+            "indexed_files": len(set(m['file'] for m in analyzer.metadata)),
+            "total_chunks": len(analyzer.documents),
+            "conversation_history": len(analyzer.conversation_history),
+            "embedding_dimension": analyzer.faiss_index.d if analyzer.faiss_index else None
+        }
+        
+        if format == 'json':
+            console.print_json(data=stats)
+        else:
+            console.print("[bold blue]Project Status[/]")
+            for key, value in stats.items():
+                console.print(f"{key}: {value}")
+            
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+
+@cli.command()
+@click.argument('action', type=click.Choice(['add', 'remove', 'list']))
+@click.argument('component', required=False)
+def compose(action: str, component: str = None):
+    """Manage project components and dependencies
+    
+    Actions:
+    - add: Add a new component or dependency
+    - remove: Remove a component or dependency
+    - list: List available components
+    """
+    try:
+        if action == 'list':
+            _show_available_components()
+            return
+            
+        if not component:
+            console.print("[red]Error: Component name is required for add/remove actions[/]")
+            return
+            
+        if action == 'add':
+            _show_component_diff(component, adding=True)
+        else:  # remove
+            _show_component_diff(component, adding=False)
+            
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+
+def _show_available_components():
+    """Show available components that can be added"""
+    components = {
+        "testing": {
+            "description": "Add testing infrastructure with pytest",
+            "files": ["tests/", "pytest.ini", "requirements-test.txt"],
+            "dependencies": ["pytest", "pytest-asyncio", "pytest-cov"]
+        },
+        "logging": {
+            "description": "Add structured logging support",
+            "files": ["logging_config.py"],
+            "dependencies": ["structlog"]
+        },
+        "docker": {
+            "description": "Add Docker support for containerization",
+            "files": ["Dockerfile", "docker-compose.yml", ".dockerignore"],
+            "dependencies": []
+        }
+    }
+    
+    console.print("\n[bold blue]Available Components[/]")
+    console.print("═" * 50)
+    
+    for name, info in components.items():
+        console.print(f"\n[bold green]{name}[/]")
+        console.print(f"  Description: {info['description']}")
+        console.print(f"  Files: {', '.join(info['files'])}")
+        if info['dependencies']:
+            console.print(f"  Dependencies: {', '.join(info['dependencies'])}")
+    
+    console.print("\n" + "═" * 50)
+
+def _show_component_diff(component: str, adding: bool = True):
+    """Show diff for adding/removing a component"""
+    components = {
+        "testing": {
+            "files": {
+                "pytest.ini": """
+[pytest]
+asyncio_mode = auto
+testpaths = tests
+python_files = test_*.py
+addopts = -v --cov=. --cov-report=term-missing
+""",
+                "tests/test_together.py": """
+import pytest
+from unittest.mock import Mock, patch
+from together_client import TogetherAIClient
+
+@pytest.fixture
+async def mock_client():
+    with patch('together_client.TogetherAIClient') as mock:
+        client = Mock()
+        mock.return_value = client
+        yield client
+
+@pytest.mark.asyncio
+async def test_embeddings(mock_client):
+    texts = ["test text"]
+    mock_client.get_embeddings.return_value = [[0.1, 0.2, 0.3]]
+    result = await mock_client.get_embeddings(texts)
+    assert len(result) == 1
+""",
+                "requirements-test.txt": """
+pytest==7.4.0
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+"""
+            }
+        },
+        "logging": {
+            "files": {
+                "logging_config.py": """
+import structlog
+import logging
+
+def configure_logging():
+    structlog.configure(
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.dev.ConsoleRenderer()
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+"""
+            }
+        }
+    }
+    
+    if component not in components:
+        console.print(f"[red]Error: Component '{component}' not found[/]")
+        console.print("[yellow]Use 'compose list' to see available components[/]")
+        return
+    
+    action = "[green]+" if adding else "[red]-"
+    console.print(f"\n[bold]Changes for {action} {component}:[/]")
+    console.print("═" * 50)
+    
+    for filename, content in components[component]["files"].items():
+        console.print(f"\n[bold]{filename}[/]")
+        console.print("─" * 50)
+        
+        for line in content.strip().split('\n'):
+            prefix = "[green]+ " if adding else "[red]- "
+            console.print(f"{prefix}{line}[/]")
+    
+    console.print("\n[bold]To apply these changes, run:[/]")
+    if adding:
+        console.print(f"[blue]  python -m pip install -r requirements-test.txt[/]" if component == "testing" else "")
+        console.print(f"[blue]  codeai compose apply {component}[/]")
+    else:
+        console.print(f"[blue]  codeai compose remove {component} --confirm[/]")
 
 if __name__ == '__main__':
     cli()

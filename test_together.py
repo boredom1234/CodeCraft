@@ -1,6 +1,8 @@
 import asyncio
 import os
 from dotenv import load_dotenv
+import pytest
+from unittest.mock import Mock, patch
 
 async def test_together():
     load_dotenv()
@@ -34,6 +36,30 @@ async def test_together():
             else:
                 print(f"API error: {response.status}")
                 print(await response.text())
+
+@pytest.fixture
+async def mock_client():
+    with patch('together_client.TogetherAIClient') as mock:
+        client = Mock()
+        mock.return_value = client
+        yield client
+
+@pytest.mark.asyncio
+async def test_embeddings(mock_client):
+    texts = ["test text"]
+    mock_client.get_embeddings.return_value = [[0.1, 0.2, 0.3]]
+    
+    result = await mock_client.get_embeddings(texts)
+    assert len(result) == 1
+    assert len(result[0]) == 3
+
+@pytest.mark.asyncio
+async def test_completion(mock_client):
+    mock_client.get_completion.return_value = "Test response"
+    
+    result = await mock_client.get_completion("test prompt")
+    assert isinstance(result, str)
+    assert len(result) > 0
 
 if __name__ == "__main__":
     asyncio.run(test_together()) 

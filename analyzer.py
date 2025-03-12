@@ -11,6 +11,7 @@ from git import Repo
 from rich.progress import Progress, TextColumn, BarColumn, TaskID, TimeRemainingColumn, SpinnerColumn
 from rich.console import Console
 import re
+import yaml
 
 console = Console()
 
@@ -22,6 +23,15 @@ class CodebaseAnalyzer:
         self.documents = []
         self.metadata = []
         self.conversation_history = []  # Store conversation history
+        
+        # Initialize config with defaults
+        self.config = {
+            "chunk_size": 20,
+            "overlap": 5,
+            "max_history": 5,
+            "temperature": 0.7,
+            "debug": False
+        }
         
         # Create data directory if it doesn't exist
         self.data_dir = Path(".codeai")
@@ -49,6 +59,17 @@ class CodebaseAnalyzer:
             else:
                 self.project_name = "default"
                 self.project_dir = self.data_dir
+                
+        # Load project config if it exists
+        config_file = self.project_dir / "config.yml"
+        if config_file.exists():
+            try:
+                with open(config_file) as f:
+                    project_config = yaml.safe_load(f)
+                    if isinstance(project_config, dict):
+                        self.config.update(project_config)
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not load project config: {str(e)}[/]")
     
     @classmethod
     async def from_github(cls, github_url: str, api_key: str, project_name: str = None):
@@ -485,27 +506,32 @@ class CodebaseAnalyzer:
     def _chunk_file(self, file_path: Path) -> List[Dict]:
         """Split file into chunks with overlap"""
         try:
+            total_lines = sum(1 for _ in open(file_path, 'r', encoding='utf-8'))
+            
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.readlines()
             
             chunks = []
-            chunk_size = 20  # lines per chunk
-            overlap = 5  # overlapping lines
+            chunk_size = self.config.get('chunk_size', 20)
+            overlap = self.config.get('overlap', 5)
             
-            for i in range(0, len(content), chunk_size - overlap):
-                chunk_lines = content[i:i + chunk_size]
-                if chunk_lines:
-                    chunks.append({
-                        "text": "".join(chunk_lines),
-                        "start_line": i + 1,
-                        "end_line": i + len(chunk_lines)
-                    })
-            
+            with Progress() as progress:
+                task = progress.add_task(
+                    f"[green]Chunking {file_path.name}...", 
+                    total=total_lines
+                )
+                
+                for i in range(0, len(content), chunk_size - overlap):
+                    chunk_lines = content[i:i + chunk_size]
+                    if chunk_lines:
+                        chunks.append({
+                            "text": "".join(chunk_lines),
+                            "start_line": i + 1,
+                            "end_line": i + len(chunk_lines)
+                        })
+                    progress.update(task, advance=len(chunk_lines))
+                
             return chunks
-        except UnicodeDecodeError:
-            console.print(f"[yellow]Warning: Could not process {file_path}: UnicodeDecodeError - probably a binary file[/]")
-            return []
         except Exception as e:
             console.print(f"[yellow]Warning: Could not process {file_path}: {str(e)}[/]")
-            traceback.print_exc()
             return []

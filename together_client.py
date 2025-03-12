@@ -3,6 +3,7 @@ import aiohttp
 from typing import List, Dict
 import os
 from dotenv import load_dotenv
+import asyncio
 
 class TogetherAIClient:
     def __init__(self, api_key: str = None):
@@ -18,6 +19,39 @@ class TogetherAIClient:
             "Content-Type": "application/json"
         }
         self.base_url = "https://api.together.xyz/v1"
+        self.max_retries = 3
+        self.retry_delay = 1  # seconds
+
+    async def _make_request(self, method: str, endpoint: str, **kwargs) -> dict:
+        """Make API request with retry logic"""
+        url = f"{self.base_url}/{endpoint}"
+        
+        for attempt in range(self.max_retries):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.request(
+                        method, 
+                        url,
+                        headers=self.headers,
+                        **kwargs
+                    ) as response:
+                        if response.status == 429:  # Rate limit
+                            retry_after = int(response.headers.get('Retry-After', self.retry_delay))
+                            await asyncio.sleep(retry_after)
+                            continue
+                            
+                        if response.status != 200:
+                            text = await response.text()
+                            raise Exception(f"API error ({response.status}): {text}")
+                            
+                        return await response.json()
+                        
+            except aiohttp.ClientError as e:
+                if attempt == self.max_retries - 1:
+                    raise Exception(f"Network error after {self.max_retries} attempts: {str(e)}")
+                await asyncio.sleep(self.retry_delay * (attempt + 1))
+                
+        raise Exception("Max retries exceeded")
 
     async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using Together AI's embedding model"""
