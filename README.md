@@ -28,7 +28,7 @@ A powerful AI-powered tool for understanding, analyzing, and exploring codebases
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/ai-codebase-reviewer.git
+git clone https://github.com/boredom1234/ai-codebase-reviewer.git
 cd ai-codebase-reviewer
 ```
 
