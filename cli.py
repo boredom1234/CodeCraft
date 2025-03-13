@@ -611,7 +611,7 @@ def switch_project(project_name: str):
 
 @cli.command()
 @click.option('--format', '-f', type=click.Choice(['text', 'json']), default='text', help='Output format for the status information')
-def status():
+def status(format='text'):
     """Show current project status and statistics.
 
     This command displays the current status of the active project,
