@@ -129,8 +129,9 @@ chunk_size = config.get('chunk_size', 20)  # Default to 20 if not set
 @click.argument('source')
 @click.option('--github', is_flag=True, help='Treat source as GitHub URL')
 @click.option('--project', '-p', help='Project name to store index in')
+@click.option('--summary', is_flag=True, help='Generate detailed codebase summary (may be slow for large codebases)')
 @click.option('--example', is_flag=True, help='Show example usage')
-def init(source: str, github: bool, project: str = None, example: bool = False):
+def init(source: str, github: bool, project: str = None, summary: bool = False, example: bool = False):
     """Initialize and index a codebase.
 
     This command initializes a codebase for analysis. You can specify a local
@@ -176,8 +177,12 @@ def init(source: str, github: bool, project: str = None, example: bool = False):
                     console.print(f"[bold]Initializing from local directory:[/] {source}")
                     analyzer = CodebaseAnalyzer(source, api_key, project)
                 
-                # Use chunk size from config
+                # Configure the analyzer
                 analyzer.config['chunk_size'] = chunk_size
+                analyzer.config['generate_summary'] = summary
+                
+                if summary:
+                    console.print("[bold yellow]Detailed codebase summary generation enabled (this may take longer)[/]")
                 
                 # Index the codebase
                 await analyzer.index()

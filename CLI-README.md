@@ -9,6 +9,7 @@ A powerful AI-powered command-line tool for understanding, analyzing, and explor
 - 📊 **Multiple Projects**: Manage different codebases through the project system
 - 🧠 **Contextual Memory**: Maintains conversation history for better follow-up questions
 - 🔄 **GitHub Integration**: Pull and analyze repositories directly from GitHub
+- 📈 **Similarity Scores**: Shows relevance percentages for files and code chunks to prioritize important information
 
 ## Installation
 
@@ -125,6 +126,28 @@ python cli.py reset-history
 ```
 
 Clears the conversation history while keeping the codebase index.
+
+### Understanding Similarity Scores
+
+When you ask a question, the tool now displays relevance percentages for files and code chunks:
+
+```
+Searching for relevant code to answer: How does the authentication system work?
+Using 8 chunks for context
+Found 8 relevant code sections
+File: auth/login.py Relevance: 82.17%
+  Chunk lines 10-35 Relevance: 89.54%
+  Chunk lines 40-60 Relevance: 74.80%
+File: models/user.py Relevance: 65.32%
+  Chunk lines 15-30 Relevance: 68.75%
+```
+
+This helps you:
+1. Understand which files and code sections are most relevant to your question
+2. See how the tool prioritizes information (sorted by relevance)
+3. Focus on the highest-relevance code first
+
+The similarity scores are calculated based on both semantic relevance and code structure.
 
 ## Examples
 

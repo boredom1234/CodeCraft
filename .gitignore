@@ -36,3 +36,6 @@ ENV/
 
 # Config files
 .codeai/ 
+
+# Test files
+test_files/

@@ -15,6 +15,7 @@ A powerful AI-powered tool for understanding, analyzing, and exploring codebases
 - 🧠 **Context-Aware**: Maintains conversation history for coherent follow-up questions
 - 🔄 **GitHub Integration**: Directly analyze repositories from GitHub
 - 🎨 **Rich CLI Interface**: Beautiful, interactive command-line interface with progress tracking
+- 📈 **Similarity Scores**: Displays relevance percentages for files and code chunks in search results
 
 ## 🚀 Quick Start
 
@@ -135,6 +136,22 @@ The tool uses several advanced techniques:
 2. **Vector Embeddings**: Creates semantic embeddings of code chunks for intelligent search
 3. **LLM Integration**: Uses Together AI's LLMs for natural language understanding
 4. **Context Management**: Maintains conversation history and code context for better responses
+5. **Relevance Scoring**: Calculates similarity scores for files and code chunks to show which parts of the codebase are most relevant to your queries
+
+### Similarity Scores
+
+When you ask a question, the analyzer displays relevance percentages for each file and code chunk in the results:
+
+```
+Searching for relevant code to answer: How does data processing work?
+Using 10 chunks for context
+Found 10 relevant code sections
+File: processor.py Relevance: 78.45%
+  Chunk lines 1-25 Relevance: 85.32%
+  Chunk lines 30-45 Relevance: 71.58%
+```
+
+This helps you understand why certain code is shown and helps prioritize the most relevant information. Files and chunks are automatically sorted by relevance.
 
 ## 🐛 Troubleshooting
 

@@ -350,7 +350,8 @@ class CodebaseAnalyzer:
             "overlap": 5,
             "max_history": 5,
             "temperature": 0.7,
-            "debug": False
+            "debug": False,
+            "generate_summary": False
         }
         
         # Create data directory if it doesn't exist
@@ -589,6 +590,16 @@ class CodebaseAnalyzer:
                     
                     progress.update(task_index, advance=1)
                     
+                    # Generate codebase summary only if requested in config
+                    if self.config.get('generate_summary', False):
+                        task_summary = progress.add_task("[blue]Generating codebase summary...", total=1)
+                        console.print("[blue]Generating high-level codebase summary...[/]")
+                        await self._generate_codebase_summary(indexable_files)
+                        progress.update(task_summary, advance=1)
+                    else:
+                        # Just create a minimal summary
+                        self.codebase_summary = f"# Codebase Summary\n\nTotal files: {len(indexable_files)}\nFile types: {', '.join(f'{ext} ({count})' for ext, count in sorted(file_extensions.items(), key=lambda x: x[1], reverse=True))}"
+                    
                     # Save state
                     task_save = progress.add_task("[blue]Saving state...", total=1)
                     console.print("[blue]Saving state...[/]")
@@ -659,7 +670,7 @@ class CodebaseAnalyzer:
         try:
             # Analyze query intent and context
             query_context = self._analyze_query(question)
-
+            
             # Get question embedding
             question_embedding = await self.ai_client.get_embeddings([question])
             question_vector = np.array(question_embedding).astype('float32')
@@ -670,6 +681,10 @@ class CodebaseAnalyzer:
 
             # Get initial semantic matches
             D, I = self.faiss_index.search(question_vector, chunk_count * 2)  # Get more candidates
+            
+            # Display the search process to the user
+            self.console.print(f"[bold blue]Searching for relevant code to answer:[/] {question}")
+            self.console.print(f"[dim]Using {chunk_count} chunks for context[/]")
 
             # Score and rank chunks based on multiple factors
             scored_chunks = []
@@ -679,21 +694,35 @@ class CodebaseAnalyzer:
                     
                     # Handle both SemanticChunk objects and raw document strings
                     if isinstance(chunk, SemanticChunk):
+                        # Get the embedding distance
+                        distance = D[0][list(I[0]).index(idx)]
+                        
+                        # Convert distance to similarity score (1/(1+distance) gives a value between 0-1)
+                        similarity_score = 1.0 / (1.0 + distance)
+                        
                         # Use existing relevance calculation for SemanticChunk
                         relevance_score = self._calculate_chunk_relevance(
                             chunk,
                             query_context,
-                            D[0][list(I[0]).index(idx)]  # Get corresponding distance
+                            distance
                         )
+                        
+                        # Store the scores in the chunk metadata for display
+                        chunk.metadata['similarity_score'] = similarity_score
+                        chunk.metadata['relevance_score'] = relevance_score
+                        
                         scored_chunks.append((relevance_score, chunk))
                     else:
                         # For raw document strings, use a simpler relevance calculation
                         # based just on the embedding distance
                         distance = D[0][list(I[0]).index(idx)]
-                        relevance_score = 1.0 / (1.0 + distance)
+                        similarity_score = 1.0 / (1.0 + distance)
+                        relevance_score = similarity_score
                         
                         # Create a simple metadata dict from the corresponding metadata
                         metadata = self.metadata[idx] if idx < len(self.metadata) else {}
+                        metadata['similarity_score'] = similarity_score
+                        metadata['relevance_score'] = relevance_score
                         
                         # Create a temporary SemanticChunk for consistency
                         temp_chunk = SemanticChunk(chunk, metadata)
@@ -702,6 +731,8 @@ class CodebaseAnalyzer:
             # Sort by relevance and take top chunks
             scored_chunks.sort(reverse=True, key=lambda x: x[0])
             selected_chunks = [chunk for _, chunk in scored_chunks[:chunk_count]]
+
+            self.console.print(f"[bold green]Found {len(selected_chunks)} relevant code sections[/]")
 
             # Build context from chunks
             if selected_chunks:
@@ -780,19 +811,42 @@ class CodebaseAnalyzer:
         
         # Group chunks by file
         file_chunks = {}
+        file_scores = {}  # Track average scores per file
+        
         for chunk in chunks:
             file_path = chunk.metadata['file']
+            # Extract similarity score if present in metadata
+            similarity_score = chunk.metadata.get('similarity_score', 0.0)
+            
             if file_path not in file_chunks:
                 file_chunks[file_path] = []
+                file_scores[file_path] = []
+                
             file_chunks[file_path].append(chunk)
+            file_scores[file_path].append(similarity_score)
         
         # Process each file's chunks
-        for file_path, file_chunks in file_chunks.items():
-            context_parts.append(f"\n# File: {file_path}")
+        # Sort files by average similarity score (descending)
+        sorted_files = sorted(
+            file_chunks.keys(),
+            key=lambda f: sum(file_scores[f]) / len(file_scores[f]) if file_scores[f] else 0,
+            reverse=True
+        )
+        
+        for file_path in sorted_files:
+            # Calculate average score for the file
+            avg_score = sum(file_scores[file_path]) / len(file_scores[file_path]) if file_scores[file_path] else 0
+            # Format as percentage with 2 decimal places
+            score_pct = f"{avg_score * 100:.2f}%"
+            
+            context_parts.append(f"\n# File: {file_path} (Relevance: {score_pct})")
+            
+            # Display this to the user in the console
+            self.console.print(f"[bold blue]File: {file_path} [yellow]Relevance: {score_pct}[/]")
             
             # Add file-level imports first
             all_imports = set()
-            for chunk in file_chunks:
+            for chunk in file_chunks[file_path]:
                 if chunk.metadata.get('type') == 'import_section':
                     context_parts.append("\n## Imports")
                     context_parts.append("```python")
@@ -801,27 +855,40 @@ class CodebaseAnalyzer:
                     all_imports.update(chunk.metadata.get('imports', []))
             
             # Process remaining chunks
-            for chunk in sorted(file_chunks, key=lambda x: x.metadata['start_line']):
-                if chunk.metadata.get('type') != 'import_section':
-                    # Add chunk header with metadata
-                    context_parts.append(f"\n## {chunk.metadata.get('type', 'Code Section')}")
-                    context_parts.append(f"Lines {chunk.metadata['start_line']}-{chunk.metadata['end_line']}")
-                    
-                    # Add scope information
-                    if chunk.metadata.get('scope'):
-                        scope_str = ' > '.join(f"{s_type}: {s_name}" for s_type, s_name in chunk.metadata['scope'])
-                        context_parts.append(f"Scope: {scope_str}")
-                    
-                    # Add the code with syntax highlighting
-                    context_parts.append("```python")
-                    context_parts.append(chunk.content.strip())
-                    context_parts.append("```")
-                    
-                    # Add any relevant context
-                    if 'contexts' in chunk.metadata:
-                        for ctx_type, ctx in chunk.metadata['contexts'].items():
-                            if ctx_type != 'imports':  # Already handled
-                                context_parts.append(f"\n{ctx}")
+            # Sort chunks by similarity score (descending)
+            sorted_chunks = sorted(
+                [c for c in file_chunks[file_path] if c.metadata.get('type') != 'import_section'],
+                key=lambda c: c.metadata.get('similarity_score', 0.0),
+                reverse=True
+            )
+            
+            for chunk in sorted_chunks:
+                # Get similarity score for this chunk
+                chunk_score = chunk.metadata.get('similarity_score', 0.0)
+                chunk_score_pct = f"{chunk_score * 100:.2f}%"
+                
+                # Add chunk header with metadata and score
+                context_parts.append(f"\n## {chunk.metadata.get('type', 'Code Section')} (Relevance: {chunk_score_pct})")
+                context_parts.append(f"Lines {chunk.metadata['start_line']}-{chunk.metadata['end_line']}")
+                
+                # Display chunk score in console
+                self.console.print(f"  [dim]Chunk lines {chunk.metadata['start_line']}-{chunk.metadata['end_line']} [yellow]Relevance: {chunk_score_pct}[/]")
+                
+                # Add scope information
+                if chunk.metadata.get('scope'):
+                    scope_str = ' > '.join(f"{s_type}: {s_name}" for s_type, s_name in chunk.metadata['scope'])
+                    context_parts.append(f"Scope: {scope_str}")
+                
+                # Add the code with syntax highlighting
+                context_parts.append("```python")
+                context_parts.append(chunk.content.strip())
+                context_parts.append("```")
+                
+                # Add any relevant context
+                if 'contexts' in chunk.metadata:
+                    for ctx_type, ctx in chunk.metadata['contexts'].items():
+                        if ctx_type != 'imports':  # Already handled
+                            context_parts.append(f"\n{ctx}")
         
         return "\n".join(context_parts)
 
@@ -831,12 +898,18 @@ class CodebaseAnalyzer:
         
         # Group chunks by file
         file_chunks = {}
+        file_scores = {}  # Track scores per file
+        
         for chunk in chunks:
             # Get file path from chunk metadata or use a default
             file_path = chunk.metadata.get('file', 'unknown_file') if hasattr(chunk, 'metadata') else 'unknown_file'
             
+            # Get similarity score if available
+            similarity_score = chunk.metadata.get('similarity_score', 0.0) if hasattr(chunk, 'metadata') else 0.0
+            
             if file_path not in file_chunks:
                 file_chunks[file_path] = []
+                file_scores[file_path] = []
             
             # Store the chunk content
             content = chunk.content if hasattr(chunk, 'content') else str(chunk)
@@ -845,16 +918,41 @@ class CodebaseAnalyzer:
             start_line = chunk.metadata.get('start_line', 1) if hasattr(chunk, 'metadata') else 1
             end_line = chunk.metadata.get('end_line', start_line + content.count('\n')) if hasattr(chunk, 'metadata') else start_line + content.count('\n')
             
-            file_chunks[file_path].append((content, start_line, end_line))
+            file_chunks[file_path].append((content, start_line, end_line, similarity_score))
+            file_scores[file_path].append(similarity_score)
+        
+        # Sort files by average similarity score (descending)
+        sorted_files = sorted(
+            file_chunks.keys(),
+            key=lambda f: sum(file_scores[f]) / len(file_scores[f]) if file_scores[f] else 0,
+            reverse=True
+        )
         
         # Process each file's chunks
-        for file_path, chunks_info in file_chunks.items():
-            context_parts.append(f"\n# File: {file_path}")
+        for file_path in sorted_files:
+            # Calculate average score for the file
+            avg_score = sum(file_scores[file_path]) / len(file_scores[file_path]) if file_scores[file_path] else 0
+            # Format as percentage with 2 decimal places
+            score_pct = f"{avg_score * 100:.2f}%"
+            
+            context_parts.append(f"\n# File: {file_path} (Relevance: {score_pct})")
+            
+            # Display this to the user in the console
+            self.console.print(f"[bold blue]File: {file_path} [yellow]Relevance: {score_pct}[/]")
+            
+            # Sort chunks by similarity score (descending)
+            sorted_chunks = sorted(file_chunks[file_path], key=lambda c: c[3], reverse=True)
             
             # Add each chunk with line numbers
-            for content, start_line, end_line in chunks_info:
-                context_parts.append(f"\n## Code (Lines {start_line}-{end_line})")
+            for content, start_line, end_line, similarity_score in sorted_chunks:
+                # Format score as percentage
+                score_pct = f"{similarity_score * 100:.2f}%"
+                
+                context_parts.append(f"\n## Code (Lines {start_line}-{end_line}, Relevance: {score_pct})")
                 context_parts.append("```python")
+                
+                # Display chunk score in console
+                self.console.print(f"  [dim]Chunk lines {start_line}-{end_line} [yellow]Relevance: {score_pct}[/]")
                 
                 # Add line numbers to the code
                 lines = content.splitlines()
@@ -899,21 +997,49 @@ class CodebaseAnalyzer:
         """Generate response with enhanced prompt engineering"""
         # Build enhanced prompt
         prompt_parts = [
+            "You are an AI assistant analyzing code. Focus only on the provided context and be direct and accurate.",
             f"Question type: {query_context['type']}",
-            f"Focus areas: {', '.join(f'{t}: {n}' for t, n in query_context['focus'])}" if query_context['focus'] else "",
-            "Code elements mentioned:",
-            *[f"- {k}: {', '.join(v)}" for k, v in query_context['code_elements'].items() if v],
-            "\nQuestion:",
-            question,
-            "\nRelevant code context:",
-            context
         ]
         
+        # Add focus areas if any
+        if query_context['focus']:
+            prompt_parts.append(f"Focus areas: {', '.join(f'{t}: {n}' for t, n in query_context['focus'])}")
+        
+        # Add code elements if present
+        code_elements = [f"- {k}: {', '.join(v)}" for k, v in query_context['code_elements'].items() if v]
+        if code_elements:
+            prompt_parts.append("Code elements mentioned:")
+            prompt_parts.extend(code_elements)
+        
+        # Add the question
+        prompt_parts.extend([
+            "\nQuestion:",
+            question,
+        ])
+        
+        # Check if context is too large and needs to be truncated
+        if len(context) > 10000:  # Reduced from 12000 to be more conservative
+            console.print("[yellow]Context is very large, truncating to fit token limits[/]")
+            # Simple truncation approach - keep the beginning which usually has the most relevant info
+            context = context[:10000] + "\n\n[Context truncated due to size]"
+        
+        # Add the context
+        prompt_parts.extend([
+            "\nRelevant code context:",
+            context
+        ])
+        
+        # Add conversation history if relevant
         if history_context:
             prompt_parts.extend([
                 "\nRelevant conversation history:",
                 history_context
             ])
+        
+        # Add final instructions - keeping it simpler
+        prompt_parts.extend([
+            "\nFormat your response with markdown. Include file paths and line numbers when referencing code."
+        ])
         
         enhanced_prompt = "\n".join(filter(None, prompt_parts))
         
@@ -1359,6 +1485,13 @@ class CodebaseAnalyzer:
             with open(history_path, 'wb') as f:
                 pickle.dump(self.conversation_history, f)
             console.print(f"[green]Conversation history saved with {len(self.conversation_history)} exchanges[/]")
+            
+            # Save codebase summary if it exists
+            if hasattr(self, 'codebase_summary'):
+                summary_path = self.project_dir / "codebase_summary.md"
+                with open(summary_path, 'w', encoding='utf-8') as f:
+                    f.write(self.codebase_summary)
+                console.print(f"[green]Codebase summary saved to {summary_path}[/]")
         except Exception as e:
             console.print(f"[bold red]Error saving state: {str(e)}[/]")
             traceback.print_exc()
@@ -1396,6 +1529,15 @@ class CodebaseAnalyzer:
                 console.print(f"[green]Conversation history loaded with {len(self.conversation_history)} exchanges[/]")
             else:
                 self.conversation_history = []
+            
+            # Load codebase summary if it exists
+            summary_path = self.project_dir / "codebase_summary.md"
+            if summary_path.exists():
+                with open(summary_path, 'r', encoding='utf-8') as f:
+                    self.codebase_summary = f.read()
+                console.print(f"[green]Codebase summary loaded from {summary_path}[/]")
+            else:
+                self.codebase_summary = "# Codebase Summary\n\nNo detailed summary available."
                 
         except FileNotFoundError as e:
             console.print(f"[bold red]Error loading state: {str(e)}[/]")
@@ -1405,3 +1547,74 @@ class CodebaseAnalyzer:
             console.print(f"[bold red]Error loading state: {str(e)}[/]")
             traceback.print_exc()
             raise
+
+    async def _generate_codebase_summary(self, indexable_files):
+        """Generate a high-level summary of the codebase structure."""
+        try:
+            # Collect key files and their purposes
+            key_files = []
+            file_count_by_type = {}
+            directory_structure = {}
+            
+            # Analyze file types and directory structure
+            for file_path in indexable_files:
+                rel_path = str(file_path.relative_to(self.path))
+                ext = file_path.suffix.lower()
+                file_count_by_type[ext] = file_count_by_type.get(ext, 0) + 1
+                
+                # Track directory structure
+                parts = rel_path.split(os.sep)
+                current_level = directory_structure
+                for i, part in enumerate(parts[:-1]):  # Process directories
+                    if part not in current_level:
+                        current_level[part] = {}
+                    current_level = current_level[part]
+                
+                # Identify potential key files
+                filename = file_path.name.lower()
+                if any(key in filename for key in ['main', 'app', 'index', 'server', 'config', 'core']):
+                    # Read first few lines to get a sense of the file
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            first_lines = ''.join(f.readline() for _ in range(10))
+                        key_files.append({
+                            'path': rel_path,
+                            'preview': first_lines[:200] + '...' if len(first_lines) > 200 else first_lines
+                        })
+                    except Exception:
+                        key_files.append({'path': rel_path, 'preview': 'Could not read file'})
+            
+            # Generate a textual summary
+            summary_parts = [
+                "# Codebase Summary",
+                f"\n## Overview",
+                f"Total files: {len(indexable_files)}",
+                f"File types: {', '.join(f'{ext} ({count})' for ext, count in sorted(file_count_by_type.items(), key=lambda x: x[1], reverse=True))}",
+                
+                f"\n## Key Files",
+            ]
+            
+            for file_info in key_files[:10]:  # Limit to 10 key files
+                summary_parts.append(f"\n### {file_info['path']}")
+                summary_parts.append(f"```\n{file_info['preview']}\n```")
+            
+            # Add directory structure
+            summary_parts.append(f"\n## Directory Structure")
+            
+            def format_directory(dir_dict, prefix=''):
+                lines = []
+                for name, contents in dir_dict.items():
+                    lines.append(f"{prefix}📁 {name}/")
+                    if contents:
+                        lines.extend(format_directory(contents, prefix + '  '))
+                return lines
+            
+            summary_parts.extend(format_directory(directory_structure))
+            
+            # Store the summary
+            self.codebase_summary = '\n'.join(summary_parts)
+            console.print(f"[green]Generated codebase summary ({len(summary_parts)} sections)[/]")
+            
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not generate complete codebase summary: {str(e)}[/]")
+            self.codebase_summary = f"# Codebase Summary\n\nTotal files: {len(indexable_files)}"
