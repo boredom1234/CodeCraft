@@ -8,7 +8,7 @@ import os
 import traceback
 from together_client import TogetherAIClient
 from git import Repo
-from rich.progress import Progress, TextColumn, BarColumn, TaskID, TimeRemainingColumn, SpinnerColumn
+from rich.progress import Progress, TextColumn, BarColumn, TaskID, TimeRemainingColumn, SpinnerColumn, TimeElapsedColumn, TaskProgressColumn
 from rich.console import Console
 import re
 import yaml
@@ -28,8 +28,19 @@ from rich.console import Group
 console = Console()
 
 class CodeStructure:
-    """Helper class to track code structure and context"""
+    """Helper class to track code structure and context.
+
+    Attributes:
+        imports (List[str]): A list of import statements found in the code.
+        classes (Dict[str, Dict[str, List[str]]]): A dictionary mapping class names to their methods and attributes.
+        functions (List[str]): A list of function names found in the code.
+        global_vars (List[str]): A list of global variables found in the code.
+        docstrings (Dict[ast.AST, str]): A dictionary mapping AST nodes to their docstrings.
+        comments (List[str]): A list of comments found in the code.
+    """
+    
     def __init__(self):
+        """Initialize a new CodeStructure instance with empty lists and dictionaries."""
         self.imports = []
         self.classes = {}  # class_name -> {methods: [], attributes: []}
         self.functions = []
@@ -38,21 +49,54 @@ class CodeStructure:
         self.comments = []
         
     def add_import(self, import_stmt: str):
+        """Add an import statement to the structure.
+
+        Args:
+            import_stmt (str): The import statement to add.
+        """
         self.imports.append(import_stmt.strip())
         
     def add_class(self, class_name: str, methods: List[str], attributes: List[str]):
+        """Add a class with its methods and attributes to the structure.
+
+        Args:
+            class_name (str): The name of the class.
+            methods (List[str]): A list of method names in the class.
+            attributes (List[str]): A list of attribute names in the class.
+        """
         self.classes[class_name] = {"methods": methods, "attributes": attributes}
         
     def add_function(self, func_name: str):
+        """Add a function name to the structure.
+
+        Args:
+            func_name (str): The name of the function.
+        """
         self.functions.append(func_name)
         
     def add_global(self, var_name: str):
+        """Add a global variable name to the structure.
+
+        Args:
+            var_name (str): The name of the global variable.
+        """
         self.global_vars.append(var_name)
         
     def add_docstring(self, node: ast.AST, docstring: str):
+        """Add a docstring associated with an AST node to the structure.
+
+        Args:
+            node (ast.AST): The AST node associated with the docstring.
+            docstring (str): The docstring text.
+        """
         self.docstrings[node] = docstring.strip()
         
     def add_comment(self, comment: str):
+        """Add a comment to the structure.
+
+        Args:
+            comment (str): The comment text.
+        """
         self.comments.append(comment.strip())
 
 def extract_code_structure(content: str, file_type: str = 'py') -> CodeStructure:
@@ -367,17 +411,18 @@ class CodebaseAnalyzer:
             raise
     
     async def index(self):
-        """Index the codebase"""
+        """Index the codebase with detailed progress feedback."""
         console.print("[bold blue]Starting indexing process...[/]")
         
         try:
-            # Create a rich progress display
+            # Create a rich progress display with more detailed feedback
             with Progress(
                 SpinnerColumn(),
-                TextColumn("[bold blue]{task.description}"),
+                TextColumn("[bold blue]{task.description}[/]"),
                 BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TaskProgressColumn(),
                 TimeRemainingColumn(),
+                TimeElapsedColumn(),
                 console=console
             ) as progress:
                 # Find all files
@@ -389,7 +434,7 @@ class CodebaseAnalyzer:
                 # Show sample of files for debugging
                 if all_files:
                     sample_files = all_files[:5]
-                    console.print(f"[dim]Sample files: {', '.join([str(f) for f in sample_files])}{' ...' if len(all_files) > 5 else ''}[/]")
+                    console.print(f"[dim]Sample files: {', '.join([str(f) for f in sample_files[:5]])}{' ...' if len(all_files) > 5 else ''}[/]")
                 
                 # Filter indexable files - with more detailed debugging
                 task_filter = progress.add_task("[green]Filtering indexable files...", total=len(all_files))
@@ -404,6 +449,7 @@ class CodebaseAnalyzer:
                         file_extensions[ext] = file_extensions.get(ext, 0) + 1
                 
                 # Print detailed extension breakdown
+                progress.update(task_filter, completed=len(all_files))
                 console.print(f"[green]Found {len(indexable_files)} indexable files[/]")
                 if file_extensions:
                     console.print("[green]Extension breakdown:[/]")
@@ -471,7 +517,7 @@ class CodebaseAnalyzer:
                             } for chunk in chunks])
                             
                             embedded_files += 1
-                            console.print(f"[green]Successfully embedded {file_path} ({len(chunks)} chunks)[/]")
+                            console.print(f"[green]✓ Successfully embedded {file_path} ({len(chunks)} chunks)[/]")
                         except Exception as e:
                             error_files += 1
                             console.print(f"[red]Error generating embeddings for {file_path}: {str(e)}[/]")

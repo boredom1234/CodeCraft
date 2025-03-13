@@ -75,8 +75,11 @@ def setup_together_api():
 
 @click.group()
 def cli():
-    """Code Understanding Assistant powered by Together AI"""
-    pass
+    """Code Understanding Assistant powered by Together AI
+
+    This tool helps you analyze codebases, providing insights, suggestions,
+    and debugging assistance. Use the commands below to interact with the tool.
+    """
 
 # Add a more robust error handling decorator
 def handle_cli_errors(f):
@@ -98,16 +101,51 @@ def handle_cli_errors(f):
 @cli.command()
 @handle_cli_errors
 def configure():
-    """Configure API keys and settings"""
+    """Configure API keys and settings
+
+    This command helps you set up the necessary API keys and configuration
+    settings for the application. It will prompt you to enter your Together AI
+    API key if it's not already set.
+    """
     api_key = setup_together_api()
     console.print("[green]Configuration saved successfully![/]")
+
+def load_config() -> dict:
+    """Load configuration from config.yml file."""
+    config_path = Path('config.yml')
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    return {}
+
+# Load configuration at the start
+config = load_config()
+
+# Use configuration settings in the application
+# For example, setting default chunk size from config
+chunk_size = config.get('chunk_size', 20)  # Default to 20 if not set
 
 @cli.command()
 @click.argument('source')
 @click.option('--github', is_flag=True, help='Treat source as GitHub URL')
 @click.option('--project', '-p', help='Project name to store index in')
+@click.option('--example', is_flag=True, help='Show example usage')
 def init(source: str, github: bool, project: str = None):
-    """Initialize and index a codebase"""
+    """Initialize and index a codebase.
+
+    This command initializes a codebase for analysis. You can specify a local
+    directory or a GitHub repository URL. Use the --github flag if the source
+    is a GitHub URL. Optionally, specify a project name to store the index.
+
+    Examples:
+    
+    
+    # Initialize a local directory
+    python cli.py init /path/to/codebase
+
+    # Initialize from a GitHub repository
+    python cli.py init https://github.com/user/repo --github
+    """
     try:
         # Ensure API key is configured
         api_key = setup_together_api()
@@ -117,7 +155,7 @@ def init(source: str, github: bool, project: str = None):
         if project:
             create_project_cmd = get_command('create_project')
             ctx = click.Context(create_project_cmd, info_name='create_project')
-            create_project_cmd.invoke(ctx, project_name=project)
+            create_project(ctx, project_name=project)
         
         async def run_setup_and_indexing():
             try:
@@ -128,6 +166,9 @@ def init(source: str, github: bool, project: str = None):
                 else:
                     console.print(f"[bold]Initializing from local directory:[/] {source}")
                     analyzer = CodebaseAnalyzer(source, api_key, project)
+                
+                # Use chunk size from config
+                analyzer.config['chunk_size'] = chunk_size
                 
                 # Index the codebase
                 await analyzer.index()
@@ -158,7 +199,16 @@ def init(source: str, github: bool, project: str = None):
 @click.option('--reset', '-r', is_flag=True, help='Reset conversation history before starting')
 @click.option('--project', '-p', help='Project to use')
 def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bool = False, project: str = None):
-    """Ask questions about the codebase"""
+    """Ask questions about the codebase.
+
+    This command allows you to query the codebase for information or
+    suggestions. You can use it in interactive mode or provide a single
+    question.
+
+    Examples:
+        codeai ask --interactive
+        codeai ask "What does this function do?"
+    """
     try:
         # Change to specified project if requested
         if project:
@@ -298,7 +348,11 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
 
 @cli.command()
 def reset_history():
-    """Reset conversation history while keeping codebase index"""
+    """Reset conversation history while keeping codebase index.
+
+    This command clears the conversation history for the active project,
+    allowing you to start fresh without re-indexing the codebase.
+    """
     try:
         console.print("[bold blue]Loading code analyzer...[/]")
         analyzer = load_analyzer_state()
@@ -333,7 +387,15 @@ def get_command(command_name):
 @cli.command()
 @click.argument('project_name')
 def create_project(project_name: str):
-    """Create a new project or switch to an existing one"""
+    """Create a new project or switch to an existing one.
+
+    This command creates a new project or switches to an existing one.
+    It manages the project registry and sets the specified project as active.
+
+    Examples:
+        codeai create-project my_new_project
+        codeai switch-project existing_project
+    """
     try:
         projects_dir = Path(".codeai") / "projects"
         projects_dir.mkdir(exist_ok=True, parents=True)
@@ -367,7 +429,14 @@ def create_project(project_name: str):
 
 @cli.command()
 def list_projects():
-    """List all available projects"""
+    """List all available projects.
+
+    This command lists all the projects that have been created and
+    indicates which project is currently active.
+
+    Example:
+        codeai list-projects
+    """
     try:
         registry_file = Path(".codeai") / "registry.pkl"
         console.print(f"[dim]Looking for registry at: {registry_file}[/]")
@@ -425,7 +494,15 @@ def list_projects():
 
 @cli.command()
 def debug_projects():
-    """Debug project registry (for development use)"""
+    """Debug project registry (for development use).
+
+    This command is intended for developers to debug the project registry.
+    It displays raw registry content and attempts to recreate the registry
+    if necessary.
+
+    Example:
+        codeai debug-projects
+    """
     try:
         registry_file = Path(".codeai") / "registry.pkl"
         
@@ -444,14 +521,14 @@ def debug_projects():
         console.print("\n[bold blue]All projects:[/]")
         project_count = 0
         for name, info in projects.items():
-            console.print(f"[dim]Entry: {name} = {info}[/]")
             if name != 'active':
                 project_count += 1
                 console.print(f"  - Project name: '{name}'")
                 console.print(f"    Is active: {name == active}")
                 console.print(f"    Created: {info.get('created', 'unknown')}")
+                console.print(f"    Raw info: {info}")
         
-        console.print(f"\n[bold blue]Total projects found:[/] {project_count}")
+        console.print(f"\n[bold blue]Total projects found:[/] {project_count}") 
         
         # Try again with direct keys/values
         console.print("\n[bold blue]Direct keys/values from registry:[/]")
@@ -509,9 +586,18 @@ def switch_project(project_name: str):
         exit(1)
 
 @cli.command()
-@click.option('--format', '-f', type=click.Choice(['text', 'json']), default='text')
+@click.option('--format', '-f', type=click.Choice(['text', 'json']), default='text', help='Output format for the status information')
 def status():
-    """Show current project status and statistics"""
+    """Show current project status and statistics.
+
+    This command displays the current status of the active project,
+    including the number of indexed files, total chunks, and conversation
+    history length.
+
+    Examples:
+        codeai status --format text
+        codeai status --format json
+    """
     try:
         analyzer = load_analyzer_state()
         
@@ -537,12 +623,16 @@ def status():
 @click.argument('action', type=click.Choice(['add', 'remove', 'list']))
 @click.argument('component', required=False)
 def compose(action: str, component: str = None):
-    """Manage project components and dependencies
-    
-    Actions:
-    - add: Add a new component or dependency
-    - remove: Remove a component or dependency
-    - list: List available components
+    """Manage project components and dependencies.
+
+    This command allows you to add, remove, or list project components
+    and dependencies. Use 'add' to include a new component, 'remove' to
+    delete an existing component, or 'list' to view available components.
+
+    Examples:
+        codeai compose add testing
+        codeai compose remove logging
+        codeai compose list
     """
     try:
         if action == 'list':
@@ -560,6 +650,7 @@ def compose(action: str, component: str = None):
             
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
+        traceback.print_exc()
 
 def _show_available_components():
     """Show available components that can be added"""
