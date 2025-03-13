@@ -130,7 +130,7 @@ chunk_size = config.get('chunk_size', 20)  # Default to 20 if not set
 @click.option('--github', is_flag=True, help='Treat source as GitHub URL')
 @click.option('--project', '-p', help='Project name to store index in')
 @click.option('--example', is_flag=True, help='Show example usage')
-def init(source: str, github: bool, project: str = None):
+def init(source: str, github: bool, project: str = None, example: bool = False):
     """Initialize and index a codebase.
 
     This command initializes a codebase for analysis. You can specify a local
@@ -139,7 +139,7 @@ def init(source: str, github: bool, project: str = None):
 
     Examples:
     
-    
+    
     # Initialize a local directory
     python cli.py init /path/to/codebase
 
@@ -147,6 +147,15 @@ def init(source: str, github: bool, project: str = None):
     python cli.py init https://github.com/user/repo --github
     """
     try:
+        # Show example usage if requested
+        if example:
+            console.print("[bold blue]Example Usage:[/]")
+            console.print("\n[green]Initialize local directory:[/]")
+            console.print("  python cli.py init /path/to/codebase")
+            console.print("\n[green]Initialize from GitHub:[/]")
+            console.print("  python cli.py init https://github.com/user/repo --github")
+            return
+
         # Ensure API key is configured
         api_key = setup_together_api()
         console.print(f"[green]Using API key:[/] {api_key[:5]}...{api_key[-5:]}")
@@ -315,7 +324,8 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
                     else:
                         # Normal mode
                         response = await analyzer.query(question, chunks)
-                        console.print(f"\n[bold blue]Answer:[/] {response}\n")
+                        # The response is already formatted and printed by the _format_markdown_response method
+                        # so we don't need to print it again here
                     
                     # Save analyzer state to persist conversation history
                     save_analyzer_state(analyzer)
@@ -377,8 +387,17 @@ def load_analyzer_state(project_name: str = None):
     
     # Create analyzer with saved state
     analyzer = CodebaseAnalyzer(".", api_key, project_name)  # Path doesn't matter for loading
-    analyzer.load_state()
-    return analyzer
+    
+    try:
+        analyzer.load_state()
+        return analyzer
+    except FileNotFoundError:
+        console.print("[yellow]No saved state found. Please index a codebase first using 'python cli.py init'[/]")
+        exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Error loading analyzer state: {str(e)}[/]")
+        traceback.print_exc()
+        exit(1)
 
 def get_command(command_name):
     """Get a command from the CLI group by name"""
