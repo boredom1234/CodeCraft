@@ -1,4 +1,4 @@
-# AI Codebase Reviewer
+# CodeWhisperer
 
 <div align="center">
   <img src="logo.jpg" alt="AI Codebase Reviewer Logo" width="200">
