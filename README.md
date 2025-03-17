@@ -34,8 +34,8 @@ A powerful AI-powered tool for understanding, analyzing, and exploring codebases
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/boredom1234/ai-codebase-reviewer.git
-cd ai-codebase-reviewer
+git clone https://github.com/boredom1234/CodeWhisperer.git
+cd CodeWhisperer
 ```
 
 2. Create and activate a virtual environment (recommended):
