@@ -24,6 +24,8 @@ from rich.style import Style
 from rich.text import Text
 from rich.columns import Columns
 from rich.console import Group
+import datetime
+from collections import defaultdict
 
 console = Console()
 
@@ -619,40 +621,72 @@ class CodebaseAnalyzer:
     
     def _create_header(self, title: str) -> Panel:
         """Create a styled header panel"""
+        from rich.text import Text
+        from rich import box
+        
+        # Create a more professional header with proper text styling and alignment
+        header_text = Text(title, style="bold white on blue", justify="center")
+        
         return Panel(
-            Text(title, style="bold blue", justify="center"),
-            box=box.ROUNDED,
+            header_text,
+            box=box.HEAVY_HEAD,
             border_style="blue",
             padding=(1, 2)
         )
 
     def _create_footer(self, text: str) -> Panel:
         """Create a styled footer panel"""
+        from rich.text import Text
+        from rich import box
+        
+        # Create a professional footer with metadata
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        footer_content = Text(f"{text} | Generated: {timestamp}", style="dim", justify="center")
+        
         return Panel(
-            Text(text, style="dim", justify="center"),
-            box=box.ROUNDED,
+            footer_content,
+            box=box.HORIZONTALS,
             border_style="blue",
-            padding=(1, 2)
+            padding=(1, 1)
         )
 
-    def _format_output(self, text: str, title: str = "Code Analysis"):
+    def _format_output(self, text: str, title: str = "Code Analysis Report"):
         """Format text using Rich's markdown renderer with enhanced layout"""
         try:
+            # Import required components for rich formatting
+            from rich.markdown import Markdown
+            from rich.panel import Panel
+            from rich import box
+            from rich.table import Table
+            
             # Create header
             header = self._create_header(title)
             
-            # Create main content
-            md = Markdown(text)
+            # Process the text to enhance code blocks
+            enhanced_text = self._enhance_code_blocks(text)
+            
+            # Create main content with professional styling
+            md = Markdown(enhanced_text)
             main_panel = Panel(
                 md,
                 border_style="blue",
-                box=box.ROUNDED,
-                padding=(1, 2)
+                box=box.HEAVY,
+                padding=(1, 2),
+                title="Technical Analysis",
+                title_align="left"
             )
             
             # Create footer with stats
-            footer_text = f"Project: {self.project_name} | Chunks: {len(self.documents)} | Files: {len(set(m['file'] for m in self.metadata))}"
-            footer = self._create_footer(footer_text)
+            stats_table = Table.grid(padding=1)
+            stats_table.add_column(style="bold blue", justify="right")
+            stats_table.add_column(style="white")
+            
+            stats_table.add_row("Project:", self.project_name)
+            stats_table.add_row("Indexed Files:", str(len(set(m['file'] for m in self.metadata))))
+            stats_table.add_row("Total Chunks:", str(len(self.documents)))
+            stats_table.add_row("History Items:", str(len(self.conversation_history)))
+            
+            footer = self._create_footer("AI Code Analysis Engine")
             
             # Update layout
             self.layout["header"].update(header)
@@ -664,6 +698,8 @@ class CodebaseAnalyzer:
             
         except Exception as e:
             self.console.print(f"[bold red]Error formatting output:[/] {str(e)}")
+            # Fallback to simple formatting
+            self.console.print(f"\n[bold blue]{title}[/]\n\n{text}\n")
 
     async def query(self, question: str, chunk_count: int = None) -> str:
         """Query the codebase with enhanced semantic understanding."""
@@ -730,6 +766,11 @@ class CodebaseAnalyzer:
 
             # Sort by relevance and take top chunks
             scored_chunks.sort(reverse=True, key=lambda x: x[0])
+            
+            # Store the relevance scores in the chunk metadata before extracting just the chunks
+            for score, chunk in scored_chunks[:chunk_count]:
+                chunk.metadata['similarity_score'] = score  # Make sure the score is saved in metadata
+            
             selected_chunks = [chunk for _, chunk in scored_chunks[:chunk_count]]
 
             self.console.print(f"[bold green]Found {len(selected_chunks)} relevant code sections[/]")
@@ -806,29 +847,23 @@ class CodebaseAnalyzer:
         return score
 
     def _build_enhanced_context(self, chunks: List[SemanticChunk], query_context: Dict) -> str:
-        """Build enhanced context from selected chunks."""
-        context_parts = []
+        """Build enhanced context with structured information and relevance data"""
+        context_parts = ["## Code Context Summary\n"]
         
         # Group chunks by file
-        file_chunks = {}
-        file_scores = {}  # Track average scores per file
+        file_chunks = defaultdict(list)
+        file_scores = defaultdict(list)
         
         for chunk in chunks:
-            file_path = chunk.metadata['file']
-            # Extract similarity score if present in metadata
-            similarity_score = chunk.metadata.get('similarity_score', 0.0)
-            
-            if file_path not in file_chunks:
-                file_chunks[file_path] = []
-                file_scores[file_path] = []
-                
+            file_path = chunk.metadata.get('file', 'unknown')
             file_chunks[file_path].append(chunk)
+            # Get the similarity score from the chunk metadata
+            similarity_score = chunk.metadata.get('similarity_score', 0.0)
             file_scores[file_path].append(similarity_score)
         
-        # Process each file's chunks
-        # Sort files by average similarity score (descending)
+        # Sort files by average relevance score
         sorted_files = sorted(
-            file_chunks.keys(),
+            file_scores.keys(),
             key=lambda f: sum(file_scores[f]) / len(file_scores[f]) if file_scores[f] else 0,
             reverse=True
         )
@@ -839,16 +874,16 @@ class CodebaseAnalyzer:
             # Format as percentage with 2 decimal places
             score_pct = f"{avg_score * 100:.2f}%"
             
-            context_parts.append(f"\n# File: {file_path} (Relevance: {score_pct})")
+            context_parts.append(f"\n### File: `{file_path}`\n**Relevance Score: {score_pct}**")
             
-            # Display this to the user in the console
-            self.console.print(f"[bold blue]File: {file_path} [yellow]Relevance: {score_pct}[/]")
+            # Display this to the user in the console with professional formatting
+            self.console.print(f"[bold blue]Analyzing File:[/] [bold white]{file_path}[/] [yellow][Relevance: {score_pct}][/]")
             
             # Add file-level imports first
             all_imports = set()
             for chunk in file_chunks[file_path]:
                 if chunk.metadata.get('type') == 'import_section':
-                    context_parts.append("\n## Imports")
+                    context_parts.append("\n#### Import Statements")
                     context_parts.append("```python")
                     context_parts.extend(chunk.metadata.get('imports', []))
                     context_parts.append("```")
@@ -862,33 +897,51 @@ class CodebaseAnalyzer:
                 reverse=True
             )
             
-            for chunk in sorted_chunks:
-                # Get similarity score for this chunk
-                chunk_score = chunk.metadata.get('similarity_score', 0.0)
-                chunk_score_pct = f"{chunk_score * 100:.2f}%"
+            # Add each code chunk with proper headers and structure
+            for i, chunk in enumerate(sorted_chunks):
+                similarity_score = chunk.metadata.get('similarity_score', 0.0)
+                score_pct = f"{similarity_score * 100:.2f}%"
                 
-                # Add chunk header with metadata and score
-                context_parts.append(f"\n## {chunk.metadata.get('type', 'Code Section')} (Relevance: {chunk_score_pct})")
-                context_parts.append(f"Lines {chunk.metadata['start_line']}-{chunk.metadata['end_line']}")
+                start_line = chunk.metadata.get('start_line', 0)
+                end_line = chunk.metadata.get('end_line', 0)
                 
-                # Display chunk score in console
-                self.console.print(f"  [dim]Chunk lines {chunk.metadata['start_line']}-{chunk.metadata['end_line']} [yellow]Relevance: {chunk_score_pct}[/]")
+                # Create a professional-looking section header
+                chunk_type = chunk.metadata.get('type', 'code').replace('_', ' ').title()
+                context_parts.append(f"\n#### {chunk_type} (Lines {start_line}-{end_line})")
+                context_parts.append(f"**Relevance: {score_pct}**")
                 
-                # Add scope information
-                if chunk.metadata.get('scope'):
-                    scope_str = ' > '.join(f"{s_type}: {s_name}" for s_type, s_name in chunk.metadata['scope'])
-                    context_parts.append(f"Scope: {scope_str}")
+                # Display chunk details to the console
+                self.console.print(f"  [dim]→ {chunk_type} [lines {start_line}-{end_line}] [yellow]Relevance: {score_pct}[/]")
                 
-                # Add the code with syntax highlighting
+                # Add code with line numbers and syntax highlighting
                 context_parts.append("```python")
-                context_parts.append(chunk.content.strip())
+                lines = chunk.content.splitlines()
+                for j, line in enumerate(lines, start=start_line):
+                    # Add properly formatted line numbers
+                    context_parts.append(f"{j:4d}| {line}")
                 context_parts.append("```")
                 
-                # Add any relevant context
-                if 'contexts' in chunk.metadata:
-                    for ctx_type, ctx in chunk.metadata['contexts'].items():
-                        if ctx_type != 'imports':  # Already handled
-                            context_parts.append(f"\n{ctx}")
+                # Add any additional context from the chunk
+                if 'contexts' in chunk.metadata and chunk.metadata['contexts']:
+                    for context_type, context_content in chunk.metadata['contexts'].items():
+                        if context_content:
+                            context_label = context_type.replace('_', ' ').title()
+                            context_parts.append(f"\n**{context_label}:**")
+                            context_parts.append(f"```\n{context_content}\n```")
+                
+                # Limit the number of chunks per file to avoid overwhelming context
+                if i >= 4:  # Show max 5 chunks per file
+                    remaining = len(sorted_chunks) - i - 1
+                    if remaining > 0:
+                        context_parts.append(f"\n*({remaining} more code sections omitted for brevity)*")
+                    break
+        
+        # Add query-specific context information
+        if query_context:
+            context_parts.append("\n### Query Analysis")
+            for key, value in query_context.items():
+                if key != 'keywords' and value:
+                    context_parts.append(f"**{key.replace('_', ' ').title()}:** {value}")
         
         return "\n".join(context_parts)
 
@@ -902,21 +955,21 @@ class CodebaseAnalyzer:
         
         for chunk in chunks:
             # Get file path from chunk metadata or use a default
-            file_path = chunk.metadata.get('file', 'unknown_file') if hasattr(chunk, 'metadata') else 'unknown_file'
+            file_path = chunk.metadata.get('file', 'unknown_file')
             
             # Get similarity score if available
-            similarity_score = chunk.metadata.get('similarity_score', 0.0) if hasattr(chunk, 'metadata') else 0.0
+            similarity_score = chunk.metadata.get('similarity_score', 0.0)
             
             if file_path not in file_chunks:
                 file_chunks[file_path] = []
                 file_scores[file_path] = []
             
             # Store the chunk content
-            content = chunk.content if hasattr(chunk, 'content') else str(chunk)
+            content = chunk.content
             
             # Get line numbers if available
-            start_line = chunk.metadata.get('start_line', 1) if hasattr(chunk, 'metadata') else 1
-            end_line = chunk.metadata.get('end_line', start_line + content.count('\n')) if hasattr(chunk, 'metadata') else start_line + content.count('\n')
+            start_line = chunk.metadata.get('start_line', 1)
+            end_line = chunk.metadata.get('end_line', start_line + content.count('\n'))
             
             file_chunks[file_path].append((content, start_line, end_line, similarity_score))
             file_scores[file_path].append(similarity_score)
@@ -1050,32 +1103,44 @@ class CodebaseAnalyzer:
         )
         
         # Format the response for display
-        self._format_markdown_response(response)
+        self._format_output(response)
         
         return response
         
-    def _format_markdown_response(self, response: str):
-        """Format the response using Rich's Markdown rendering for display"""
-        try:
-            # Create a Markdown object from the response
-            from rich.markdown import Markdown
-            from rich.panel import Panel
+    def _enhance_code_blocks(self, text: str) -> str:
+        """Enhance code blocks in markdown to look more professional"""
+        import re
+        
+        # Pattern to find code blocks
+        code_block_pattern = r"```(\w+)?\n(.*?)```"
+        
+        def replace_code_block(match):
+            lang = match.group(1) or "text"
+            code = match.group(2)
             
-            # Create a styled panel with the markdown content
-            md = Markdown(response)
-            panel = Panel(
-                md,
-                title="Answer",
-                border_style="blue",
-                padding=(1, 2)
-            )
+            # Add line numbers and improve formatting for Python code
+            if lang.lower() == "python":
+                lines = code.split("\n")
+                numbered_lines = []
+                
+                for i, line in enumerate(lines, 1):
+                    # Only add line number if the line has content
+                    if line.strip():
+                        # Format indentation consistently
+                        indentation = len(line) - len(line.lstrip())
+                        formatted_line = " " * indentation + line.lstrip()
+                        numbered_lines.append(f"{i:3d}| {formatted_line}")
+                    else:
+                        numbered_lines.append(f"   | ")
+                
+                enhanced_code = "\n".join(numbered_lines)
+                return f"```{lang}\n{enhanced_code}\n```"
             
-            # Print the formatted response
-            self.console.print(panel)
-        except Exception as e:
-            # Fallback to plain text if formatting fails
-            console.print(f"[yellow]Warning: Could not format response with Markdown: {str(e)}[/]")
-            console.print(f"\n[bold blue]Answer:[/] {response}\n")
+            return match.group(0)
+        
+        # Replace code blocks with enhanced versions
+        enhanced_text = re.sub(code_block_pattern, replace_code_block, text, flags=re.DOTALL)
+        return enhanced_text
 
     def _update_conversation_history(self, question: str, response: str, query_context: Dict):
         """Update conversation history with context"""

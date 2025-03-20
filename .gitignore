@@ -39,3 +39,6 @@ ENV/
 
 # Test files
 test_files/
+
+# documentation
+docs/
