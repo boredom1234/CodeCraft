@@ -23,14 +23,14 @@ This guide explains how to share, deploy, and use the CodeAI Docker container. T
 
 ```bash
 # Pull the image
-docker pull boredom1234/codeai:latest
+docker pull elevenlimitededition/codeai:latest
 
 # Run with your API key
 docker run -it --rm \
   -e TOGETHER_API_KEY="your_api_key_here" \
   -v $(pwd):/workspace \
   -v codeai_data:/root/.codeai \
-  boredom1234/codeai:latest --help
+  elevenlimitededition/codeai:latest --help
 ```
 
 ### Option 2: Build from Source
@@ -57,15 +57,15 @@ docker run -it --rm \
 
 ```bash
 # Tag your image
-docker tag codeai boredom1234/codeai:latest
+docker tag codeai elevenlimitededition/codeai:latest
 
 # Push to Docker Hub
-docker push boredom1234/codeai:latest
+docker push elevenlimitededition/codeai:latest
 ```
 
 Others can then pull and use your image:
 ```bash
-docker pull boredom1234/codeai:latest
+docker pull elevenlimitededition/codeai:latest
 ```
 
 ### 2. Share via Docker Save/Load
@@ -100,7 +100,7 @@ Use Docker Compose for the easiest setup:
 # docker-compose.yml
 services:
   codeai:
-    image: boredom1234/codeai:latest
+    image: elevenlimitededition/codeai:latest
     environment:
       - TOGETHER_API_KEY=${TOGETHER_API_KEY}
     volumes:
@@ -134,7 +134,7 @@ ExecStart=/usr/bin/docker run --rm \
   -e TOGETHER_API_KEY=${TOGETHER_API_KEY} \
   -v /path/to/workspace:/workspace \
   -v codeai_data:/root/.codeai \
-  boredom1234/codeai:latest
+  elevenlimitededition/codeai:latest
 Restart=always
 
 [Install]
@@ -296,5 +296,5 @@ docker stats container_name
 4. Follow the principle of least privilege
 5. Scan images for vulnerabilities:
 ```bash
-docker scan boredom1234/codeai:latest
+docker scan elevenlimitededition/codeai:latest
 ``` 
