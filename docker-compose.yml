@@ -1,0 +1,12 @@
+services:
+  codeai:
+    build: .
+    environment:
+      - TOGETHER_API_KEY=${TOGETHER_API_KEY}
+    volumes:
+      - .:/workspace
+      - codeai_data:/root/.codeai
+    working_dir: /workspace
+
+volumes:
+  codeai_data: 
