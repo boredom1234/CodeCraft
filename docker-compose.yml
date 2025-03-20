@@ -1,6 +1,9 @@
 services:
   codeai:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    image: ${DOCKER_USERNAME}/codeai:latest
     environment:
       - TOGETHER_API_KEY=${TOGETHER_API_KEY}
     volumes:
