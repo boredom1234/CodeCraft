@@ -10,46 +10,17 @@
 
 A powerful AI-powered code review assistant that provides real-time feedback on your codebase. This tool leverages Together AI to detect critical issues, performance problems, and security vulnerabilities in your code.
 
-## 🌟 Key Features
+## 📋 Table of Contents
+- [Getting Started](#-getting-started)
+- [Key Features](#-key-features)
+- [Basic Workflow](#-basic-workflow)
+- [Command Reference](#-command-reference)
+- [Configuration](#-configuration)
+- [Contributing](#-contributing)
+- [License](#-license)
+- [Acknowledgments](#-acknowledgments)
 
-### 🔍 Code Review & Analysis
-- **Live Code Review**: Real-time monitoring of code changes with immediate feedback
-- **Critical Issue Detection**: Identifies bugs, performance issues, and security vulnerabilities
-- **Static Analysis**: Built-in code analysis for common programming issues
-- **Error Detection**: Syntax errors, undefined variables, security vulnerabilities, and logic flaws
-- **Documentation Analysis**: Extract and analyze docstrings, comments, and code structure
-
-### 💻 Project Management
-- **Multi-Project Support**: Handle multiple codebases through an organized project system
-- **Project Path Management**: Set and save default project paths
-- **GitHub Integration**: Directly analyze repositories from GitHub
-- **Configuration Management**: YAML-based settings and environment variable support
-
-### 🚀 Processing & Performance
-- **Parallel Processing**: Multi-threaded code analysis for better performance
-- **Distributed Processing**: Support for distributed code analysis
-- **Batch Processing**: Efficient handling of large codebases
-- **Watch Mode**: Continuous monitoring of file changes
-
-### 📊 Code Analysis
-- **Structure Analysis**: Extract and analyze code structure (classes, functions, imports)
-- **Similarity Scoring**: Calculate relevance scores for code suggestions
-- **Multi-Language Support**: Reviews Python, JavaScript, TypeScript, Go, and more
-- **Code Pattern Detection**: Identify and analyze common code patterns
-
-### 🤖 AI Integration
-- **Together AI Integration**: Powered by state-of-the-art language models
-- **Smart Embeddings**: Generate and use embeddings for code analysis
-- **Intelligent Suggestions**: Context-aware code completion and suggestions
-- **Interactive Mode**: Ask questions and get explanations about your code
-
-### 🛠️ Developer Tools
-- **Rich CLI Interface**: Beautiful, interactive command-line interface with progress tracking
-- **Debugging Support**: Error tracing and detailed error reporting
-- **Progress Tracking**: Visual progress bars and status updates
-- **Comprehensive Logging**: Detailed logging and error reporting system
-
-## 🚀 Quick Start
+## 🚀 Getting Started
 
 ### Prerequisites
 
@@ -81,67 +52,79 @@ pip install -r requirements.txt
 python cli.py configure
 ```
 
-## 🎮 Usage
+### Initial Setup
 
-### Project Management
-
+1. Create a new project:
 ```bash
-# Create a new project
 python cli.py create-project myapp
-
-# List available projects
-python cli.py list-projects
-
-# Switch to a different project
-python cli.py switch-project myapp
 ```
 
-### Code Review
-
+2. Initialize your codebase:
 ```bash
-# Set default project path
+python cli.py init /path/to/code
+# Or initialize from GitHub
+python cli.py init --github https://github.com/username/repo
+```
+
+3. Set your project path:
+```bash
 python cli.py assist --set-project-path /path/to/your/project
+```
 
-# Review using saved project path
+## 🌟 Key Features
+
+### 🔍 Code Review & Analysis
+- **Live Code Review**: Real-time monitoring of code changes with immediate feedback
+- **Critical Issue Detection**: Identifies bugs, performance issues, and security vulnerabilities
+- **Error Detection**: Syntax errors, undefined variables, security vulnerabilities, and logic flaws
+- **Documentation Analysis**: Extract and analyze docstrings, comments, and code structure
+
+### 💻 Project Management
+- **Multi-Project Support**: Handle multiple codebases through an organized project system
+- **GitHub Integration**: Directly analyze repositories from GitHub
+- **Configuration Management**: YAML-based settings and environment variable support
+
+### 🚀 Processing & Performance
+- **Parallel Processing**: Multi-threaded code analysis for better performance
+- **Watch Mode**: Continuous monitoring of file changes
+- **Batch Processing**: Efficient handling of large codebases
+
+### 🤖 AI Integration
+- **Together AI Integration**: Powered by state-of-the-art language models
+- **Smart Embeddings**: Generate and use embeddings for code analysis
+- **Interactive Mode**: Ask questions and get explanations about your code
+
+## 💡 Basic Workflow
+
+### 1. Initialize Your Project (Required First Step)
+```bash
+# Create a project and initialize codebase
+python cli.py create-project myapp
+python cli.py init /path/to/code
+```
+
+### 2. Perform Code Reviews
+```bash
+# Review your code
 python cli.py assist
-
-# Review specific directory
-python cli.py assist /path/to/review
 
 # Watch mode for continuous review
 python cli.py assist --watch
 ```
 
-### Code Analysis
-
+### 3. Ask Questions About Your Code
 ```bash
-# Initialize codebase
-python cli.py init /path/to/code --github
-
-# Refresh codebase index
-python cli.py refresh --summary
-
-# Get code completions
-python cli.py complete file.py --line 42
-
-# Get inline suggestions
-python cli.py suggest file.py --line 42
-
-# Explain code sections
-python cli.py explain file.py --start-line 10 --end-line 20
+# Ask questions about your codebase
+python cli.py ask -i "How does the authentication system work?"
 ```
 
-### Interactive Features
-
+### 4. Analyze Specific Code Sections
 ```bash
-# Ask questions about code
-python cli.py ask -i "How does X work?"
+# Explain a section of code
+python cli.py explain file.py --start-line 10 --end-line 20
 
-# Reset conversation history
-python cli.py reset-history
-
-# Show project status
-python cli.py status --format json
+# Get suggestions for specific lines
+python cli.py suggest file.py --line 42
 ```
 
 ### Review Output Format
@@ -162,18 +145,18 @@ Issues are categorized into:
 
 | Command | Description | Options |
 |---------|-------------|---------|
-| `assist` | Start code review | `--watch`, `--set-project-path` |
-| `ask` | Query the codebase | `--interactive`, `--composer`, `--chunks`, `--reset`, `--project` |
+| `init` | **Initialize codebase (first step)** | `--github`, `--project`, `--summary` |
+| `create-project` | Create new project | `PROJECT_NAME` |
 | `configure` | Set up API keys | - |
-| `create-project` | Create/switch project | `PROJECT_NAME` |
-| `init` | Initialize codebase | `--github`, `--project`, `--summary`, `--workers`, `--distributed` |
+| `assist` | Start code review | `--watch`, `--set-project-path` |
+| `ask` | Query the codebase | `--interactive`, `--composer`, `--chunks` |
+| `explain` | Explain code sections | `--start-line`, `--end-line`, `--detail` |
+| `suggest` | Get inline suggestions | `--line`, `--scope`, `--threshold` |
+| `complete` | Get code completions | `--line`, `--scope`, `--patterns` |
 | `list-projects` | Show all projects | - |
 | `switch-project` | Change active project | `PROJECT_NAME` |
 | `status` | Show project statistics | `--format [text\|json]` |
 | `refresh` | Update codebase index | `--summary` |
-| `complete` | Get code completions | `--line`, `--scope`, `--patterns` |
-| `suggest` | Get inline suggestions | `--line`, `--scope`, `--threshold` |
-| `explain` | Explain code sections | `--start-line`, `--end-line`, `--detail` |
 | `reset-history` | Clear conversation | - |
 | `debug-projects` | Debug project registry | - |
 | `compose` | Manage components | `add`, `remove`, `list` |

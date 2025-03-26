@@ -2,7 +2,86 @@
 
 A powerful AI-powered code review assistant that provides real-time feedback on your codebase. This tool uses Together AI to detect critical issues, performance problems, and security vulnerabilities in your code.
 
-## Features
+## Table of Contents
+1. [Installation & Setup](#installation--setup)
+2. [Getting Started](#getting-started)
+3. [Key Features](#key-features)
+4. [Usage Guide](#usage-guide)
+5. [Command Reference](#command-reference)
+6. [Examples](#examples)
+7. [Troubleshooting](#troubleshooting)
+8. [Contributing](#contributing)
+
+## Installation & Setup
+
+### Prerequisites
+
+- Python 3.8+
+- pip package manager
+- Together AI API key
+
+### Setup Steps
+
+1. Clone or download this repository
+2. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Configure your Together AI API key:
+
+```bash
+python cli.py configure
+```
+
+This will prompt you for your API key, which will be stored in:
+- `.env` file
+- `~/.codeai/config.yml`
+
+## Getting Started
+
+Follow these steps in order to start using the AI Code Reviewer:
+
+### 1. Create a Project
+
+```bash
+python cli.py create-project PROJECT_NAME
+```
+
+### 2. Initialize Your Codebase
+
+```bash
+# Initialize a local codebase
+python cli.py init /path/to/code
+
+# Initialize from GitHub
+python cli.py init /path/to/code --github
+```
+
+### 3. Set Project Path
+
+```bash
+python cli.py assist --set-project-path /path/to/your/project
+```
+
+### 4. Start Code Review
+
+```bash
+# Review using saved project path
+python cli.py assist
+
+# Continuously monitor for changes (watch mode)
+python cli.py assist --watch
+```
+
+### 5. Ask Questions About Your Code
+
+```bash
+python cli.py ask -i "How does the authentication system work?"
+```
+
+## Key Features
 
 ### Code Review & Analysis
 - 🔍 **Live Code Review**: Real-time monitoring and analysis of code changes
@@ -45,21 +124,6 @@ A powerful AI-powered code review assistant that provides real-time feedback on 
   - Real-time feedback
   - Automatic reanalysis on changes
 
-### Code Analysis
-- 🏗️ **Structure Analysis**: 
-  - Class and function extraction
-  - Import statement analysis
-  - Code pattern detection
-- 📊 **Similarity Scoring**: 
-  - Relevance scoring for suggestions
-  - Search result ranking
-  - Code chunk similarity analysis
-- 🌐 **Multi-Language Support**: 
-  - Python
-  - JavaScript/TypeScript
-  - Go
-  - Additional language support
-
 ### AI Integration
 - 🤖 **Together AI**: 
   - State-of-the-art language models
@@ -88,84 +152,7 @@ A powerful AI-powered code review assistant that provides real-time feedback on 
   - Time remaining estimates
   - Process status updates
 
-## Installation
-
-### Prerequisites
-
-- Python 3.8+
-- pip package manager
-- Together AI API key
-
-### Setup
-
-1. Clone or download this repository
-2. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Configure your Together AI API key (see Configuration section)
-
-## Configuration
-
-Configure your Together AI API key by running:
-
-```bash
-python cli.py configure
-```
-
-This will prompt you for your API key, which will be stored in:
-- `.env` file
-- `~/.codeai/config.yml`
-
-## Usage
-
-### Project Management
-
-#### Create a new project
-
-```bash
-python cli.py create-project PROJECT_NAME
-```
-
-#### List available projects
-
-```bash
-python cli.py list-projects
-```
-
-#### Switch to a different project
-
-```bash
-python cli.py switch-project PROJECT_NAME
-```
-
-### Code Review Features
-
-#### Set up project path
-
-```bash
-# Set default project path
-python cli.py assist --set-project-path /path/to/your/project
-```
-
-#### Start code review
-
-```bash
-# Review using saved project path
-python cli.py assist
-
-# Review specific directory
-python cli.py assist /path/to/review
-```
-
-#### Watch mode
-
-```bash
-# Continuously monitor for changes
-python cli.py assist --watch
-```
+## Usage Guide
 
 ### Understanding Review Output
 
@@ -182,15 +169,44 @@ Issues are categorized into:
 3. Security vulnerabilities
 4. Significant design flaws
 
+### Project Management
+
+Once you've set up your initial project, you can manage multiple projects:
+
+#### List available projects
+
+```bash
+python cli.py list-projects
+```
+
+#### Switch to a different project
+
+```bash
+python cli.py switch-project PROJECT_NAME
+```
+
+### Additional Analysis Features
+
+```bash
+# Explain specific code sections
+python cli.py explain file.py --start-line 10 --end-line 20
+
+# Get code suggestions for specific lines
+python cli.py suggest file.py --line 42
+
+# Get code completions
+python cli.py complete file.py --line 42
+```
+
 ## Command Reference
 
 | Command | Description | Example |
 |---------|-------------|---------|
+| `init` | **Initialize codebase (first step)** | `python cli.py init /path/to/code --github` |
+| `create-project` | Create project | `python cli.py create-project myapp` |
+| `configure` | Set up API key | `python cli.py configure` |
 | `assist` | Start code review | `python cli.py assist --watch` |
 | `ask` | Query the codebase | `python cli.py ask -i "How does X work?"` |
-| `configure` | Set up API key | `python cli.py configure` |
-| `create-project` | Create project | `python cli.py create-project myapp` |
-| `init` | Initialize codebase | `python cli.py init /path/to/code --github` |
 | `list-projects` | List all projects | `python cli.py list-projects` |
 | `switch-project` | Change project | `python cli.py switch-project myapp` |
 | `status` | Show statistics | `python cli.py status --format json` |
@@ -204,6 +220,13 @@ Issues are categorized into:
 
 ### Command Options
 
+#### `init` (First step)
+- `--github`: Initialize from GitHub URL
+- `--project`: Specify project name
+- `--summary`: Generate detailed summary
+- `--workers`: Number of parallel workers
+- `--distributed`: Enable distributed processing
+
 #### `assist`
 - `--watch, -w`: Enable continuous monitoring
 - `--set-project-path`: Set default project path
@@ -214,13 +237,6 @@ Issues are categorized into:
 - `--chunks`: Number of context chunks
 - `--reset, -r`: Reset conversation history
 - `--project, -p`: Specify project
-
-#### `init`
-- `--github`: Initialize from GitHub URL
-- `--project`: Specify project name
-- `--summary`: Generate detailed summary
-- `--workers`: Number of parallel workers
-- `--distributed`: Enable distributed processing
 
 #### `complete`
 - `--line, -l`: Line number for context
@@ -239,20 +255,26 @@ Issues are categorized into:
 
 ## Examples
 
-### Setting up a project with continuous review
+### Complete Workflow Example
 
 ```bash
-# Create a new project
+# 1. Create a new project
 python cli.py create-project frontend-app
 
-# Set the project path
+# 2. Initialize the codebase
+python cli.py init /path/to/frontend
+
+# 3. Set the project path
 python cli.py assist --set-project-path /path/to/frontend
 
-# Start watching for changes
+# 4. Start watching for changes
 python cli.py assist --watch
+
+# 5. Ask questions about the code
+python cli.py ask -i "How does the router work?"
 ```
 
-### Reviewing multiple projects
+### Working with Multiple Projects
 
 ```bash
 # Switch between projects
