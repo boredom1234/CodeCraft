@@ -61,7 +61,7 @@ A powerful AI-powered code review assistant that provides real-time feedback on 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/CodeWhisperer.git
+git clone https://github.com/boredom1234/CodeWhisperer.git
 cd CodeWhisperer
 ```
 
