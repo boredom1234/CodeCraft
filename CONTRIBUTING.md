@@ -211,8 +211,6 @@ For feature requests, include:
 If you have questions or need help, you can:
 
 - Open an issue with your question
-- Join our community Discord/Slack (if applicable)
-- Contact the project maintainers directly (provide contact information if appropriate)
 
 ---
 
