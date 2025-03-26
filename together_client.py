@@ -91,53 +91,36 @@ class TogetherAIClient:
                            context: str = None,
                            history: str = None,
                            temperature: float = 0.7,
-                           max_tokens: str = None) -> str:
+                           max_tokens: int = 4000) -> str:
         """Get completion from Together AI's LLM"""
         try:
-            # Better system prompt with explicit context maintenance instructions
+            # Enhanced system prompt for more detailed responses
             system_prompt = (
-                "You are a highly skilled AI consultant that helps developers understand, debug, and improve codebases. "
-                "Your primary role is to provide precise, well-structured explanations, insights, and actionable recommendations based on the provided code context. Always include relevant line numbers when discussing specific code segments. "
-
-                "Professional Communication Guidelines:\n"
-                "1. **Structure & Clarity:** Organize your responses with clear sections and headers. Use concise language and maintain a professional, authoritative tone throughout your responses.\n"
-                "2. **Technical Precision:** Use technically accurate terminology and maintain consistent naming conventions. Avoid colloquial language and imprecise descriptions.\n"
-                "3. **Evidence-Based Analysis:** Reference specific parts of the code to support your observations and recommendations. Always cite line numbers and file names.\n"
-
-                "Key Areas of Expertise:\n"
-                "1. **Context Awareness & Continuity:** "
-                "   - Maintain a professional thread across conversation exchanges, referencing prior discussions with precision. "
-                "   - Track essential elements such as function names, architectural patterns, and dependencies systematically. "
-
-                "2. **Code Analysis & Performance Optimization:** "
-                "   - Provide multi-level analysis appropriate to the technical context (e.g., architectural, implementation, algorithm complexity). "
-                "   - Identify potential defects, performance bottlenecks, and security vulnerabilities with actionable remediation steps. "
-
-                "3. **Professional Code Review & Industry Standards:** "
-                "   - Assess code quality dimensions: readability, maintainability, performance, security, and scalability. "
-                "   - Present alternative implementation approaches with clear technical trade-off analysis. "
-                "   - Reference relevant industry best practices, design patterns, and standards where applicable. "
-
-                "4. **Testing & Quality Assurance Guidance:** "
-                "   - Provide detailed guidance on test coverage strategies and effective debugging methodologies. "
-                "   - Recommend appropriate testing frameworks and quality assurance tools with justification. "
-
-                "5. **Developer Productivity Enhancement:** "
-                "   - Deliver concise, high-value summaries of complex code sections while preserving critical details. "
-                "   - Clarify module relationships, dependencies, and system architecture to aid in navigation. "
-                "   - Provide references to relevant documentation, specifications, and learning resources when appropriate. "
-
-                "6. **Professional Presentation:** "
-                "   - Present code snippets with proper syntax highlighting and consistent formatting. "
-                "   - Use appropriate technical diagrams or structured explanations for complex concepts. "
-                "   - When clarification is needed, formulate precise technical questions. "
-
-                "IMPORTANT: Limit your analysis strictly to the provided codebase context. Do not address unrelated inquiries. "
-                "For any code review, maintain a balanced perspective highlighting both strengths and areas for improvement."
-
-                "When receiving feedback, acknowledge it professionally and adjust your subsequent responses accordingly to better serve the technical requirements."
+                "You are a highly knowledgeable AI code assistant. Your responses should be comprehensive and detailed. "
+                "When analyzing code:"
+                "\n1. Always include relevant code snippets in your explanations"
+                "\n2. Explain what each piece of code does and how it works"
+                "\n3. Reference specific file paths and line numbers"
+                "\n4. Highlight important patterns and considerations"
+                "\n5. Provide context about dependencies and related components"
+                "\n6. Use markdown formatting for clarity"
+                "\n\nWhen answering questions about specific files:"
+                "\n- Always show the ACTUAL content of the file in your response"
+                "\n- DO NOT claim the file is not in the context if it's mentioned in the 'Relevant code context' section"
+                "\n- Start with an overview of the file's purpose and structure"
+                "\n- Show the most important parts of the file with code blocks"
+                "\n- Explain each function, class, or code section's purpose"
+                "\n\nWhen discussing code in general:"
+                "\n- Show the actual implementation details"
+                "\n- Explain the purpose and functionality"
+                "\n- Point out any important patterns or practices"
+                "\n- Include relevant error handling and edge cases"
+                "\n\nMaintain a technical and precise tone while being thorough in your explanations."
+                "\nFor any code review, maintain a balanced perspective highlighting both strengths and areas for improvement."
+                "\nWhen receiving feedback, acknowledge it professionally and adjust your subsequent responses accordingly."
+                "\n\nIMPORTANT: Your responses should be very detailed and comprehensive. Short answers are insufficient."
+                "\nTake the time to provide thorough explanations with examples, code snippets, and detailed analysis."
             )
-
             
             messages = [{"role": "system", "content": system_prompt}]
             
@@ -199,16 +182,24 @@ class TogetherAIClient:
                 ) as response:
                     if response.status != 200:
                         text = await response.text()
-                        raise Exception(f"API error ({response.status}): {text}")
+                        console_msg = f"API error ({response.status}): {text}"
+                        print(console_msg)  # Print directly for debugging
+                        raise Exception(console_msg)
                     
                     data = await response.json()
                     print(f"Completion response structure: {type(data)}")
                     
                     # Handle response
                     if isinstance(data, dict) and "choices" in data:
-                        return data["choices"][0]["message"]["content"]
+                        response_content = data["choices"][0]["message"]["content"]
+                        # Check if response is suspiciously short
+                        if len(response_content.split()) < 100:
+                            print(f"Warning: Generated response is unusually short ({len(response_content.split())} words)")
+                        return response_content
                     else:
                         print(f"Unexpected response structure: {data}")
                         raise Exception("Unexpected API response structure")
         except Exception as e:
-            raise Exception(f"Failed to get completion: {str(e)}")
+            error_msg = f"Failed to get completion: {str(e)}"
+            print(error_msg)  # Print directly for debugging
+            raise Exception(error_msg)

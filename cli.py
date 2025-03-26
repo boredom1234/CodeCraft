@@ -131,7 +131,12 @@ chunk_size = config.get('chunk_size', 20)  # Default to 20 if not set
 @click.option('--project', '-p', help='Project name to store index in')
 @click.option('--summary', is_flag=True, help='Generate detailed codebase summary (may be slow for large codebases)')
 @click.option('--example', is_flag=True, help='Show example usage')
-def init(source: str, github: bool, project: str = None, summary: bool = False, example: bool = False):
+@click.option('--workers', type=int, help='Number of parallel workers (default: CPU count)')
+@click.option('--batch-size', type=int, default=10, help='Batch size for processing files')
+@click.option('--distributed', is_flag=True, help='Enable distributed processing')
+@click.option('--worker-addresses', help='Comma-separated list of worker addresses for distributed processing')
+def init(source: str, github: bool, project: str = None, summary: bool = False, example: bool = False,
+         workers: int = None, batch_size: int = 10, distributed: bool = False, worker_addresses: str = None):
     """Initialize and index a codebase.
 
     This command initializes a codebase for analysis. You can specify a local
@@ -140,21 +145,20 @@ def init(source: str, github: bool, project: str = None, summary: bool = False, 
 
     Examples:
     
-    
-    # Initialize a local directory
-    python cli.py init /path/to/codebase
+    # Initialize a local directory with parallel processing
+    python cli.py init /path/to/codebase --workers 4 --batch-size 20
 
-    # Initialize from a GitHub repository
-    python cli.py init https://github.com/user/repo --github
+    # Initialize from a GitHub repository with distributed processing
+    python cli.py init https://github.com/user/repo --github --distributed --worker-addresses "host1:5000,host2:5000"
     """
     try:
         # Show example usage if requested
         if example:
             console.print("[bold blue]Example Usage:[/]")
-            console.print("\n[green]Initialize local directory:[/]")
-            console.print("  python cli.py init /path/to/codebase")
-            console.print("\n[green]Initialize from GitHub:[/]")
-            console.print("  python cli.py init https://github.com/user/repo --github")
+            console.print("\n[green]Initialize local directory with parallel processing:[/]")
+            console.print("  python cli.py init /path/to/codebase --workers 4 --batch-size 20")
+            console.print("\n[green]Initialize from GitHub with distributed processing:[/]")
+            console.print("  python cli.py init https://github.com/user/repo --github --distributed --worker-addresses host1:5000,host2:5000")
             return
 
         # Ensure API key is configured
@@ -167,6 +171,20 @@ def init(source: str, github: bool, project: str = None, summary: bool = False, 
             ctx = click.Context(create_project_cmd, info_name='create_project')
             create_project(ctx, project_name=project)
         
+        # Load config and update with CLI options
+        config = load_config()
+        if workers is not None:
+            config['parallel'] = config.get('parallel', {})
+            config['parallel']['max_workers'] = workers
+        if batch_size is not None:
+            config['parallel'] = config.get('parallel', {})
+            config['parallel']['batch_size'] = batch_size
+        if distributed:
+            config['distributed'] = config.get('distributed', {})
+            config['distributed']['enabled'] = True
+            if worker_addresses:
+                config['distributed']['workers'] = worker_addresses.split(',')
+        
         async def run_setup_and_indexing():
             try:
                 # Initialize the analyzer with Together AI client
@@ -178,8 +196,7 @@ def init(source: str, github: bool, project: str = None, summary: bool = False, 
                     analyzer = CodebaseAnalyzer(source, api_key, project)
                 
                 # Configure the analyzer
-                analyzer.config['chunk_size'] = chunk_size
-                analyzer.config['generate_summary'] = summary
+                analyzer.config.update(config)
                 
                 if summary:
                     console.print("[bold yellow]Detailed codebase summary generation enabled (this may take longer)[/]")

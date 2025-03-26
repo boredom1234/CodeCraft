@@ -26,6 +26,7 @@ from rich.columns import Columns
 from rich.console import Group
 import datetime
 from collections import defaultdict
+from parallel_processor import ParallelProcessor
 
 console = Console()
 
@@ -342,6 +343,7 @@ class CodebaseAnalyzer:
         self.documents = []
         self.metadata = []
         self.conversation_history = []
+        self.parallel_processor = ParallelProcessor()  # Add parallel processor
         
         # Initialize Rich console with markdown support and force color
         self.console = Console(force_terminal=True, color_system="truecolor")
@@ -453,52 +455,66 @@ class CodebaseAnalyzer:
             raise
     
     async def index(self):
-        """Index the codebase with detailed progress feedback."""
-        console.print("[bold blue]Starting indexing process...[/]")
-        
+        """Index the codebase using parallel processing."""
         try:
-            # Create a rich progress display with more detailed feedback
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[bold blue]{task.description}[/]"),
-                BarColumn(),
-                TaskProgressColumn(),
-                TimeRemainingColumn(),
-                TimeElapsedColumn(),
-                console=console
-            ) as progress:
+            with Progress() as progress:
                 # Find all files
-                task_find = progress.add_task("[green]Finding files...", total=None)
-                all_files = list(self.path.rglob("*.*"))
-                progress.update(task_find, total=len(all_files), completed=len(all_files))
-                console.print(f"[green]Found {len(all_files)} files in total[/]")
+                task_find = progress.add_task("[blue]Finding files...", total=1)
+                console.print("[blue]Starting indexing process...[/]")
                 
-                # Show sample of files for debugging
+                all_files = []
+                for root, _, files in os.walk(self.path):
+                    for file in files:
+                        all_files.append(Path(root) / file)
+                        
+                progress.update(task_find, advance=1)
+                console.print(f"Found {len(all_files)} files in total")
+                
+                # Show sample of files found
                 if all_files:
                     sample_files = all_files[:5]
-                    console.print(f"[dim]Sample files: {', '.join([str(f) for f in sample_files[:5]])}{' ...' if len(all_files) > 5 else ''}[/]")
+                    console.print("Sample files:", ", ".join(str(f) for f in sample_files), "...")
                 
-                # Filter indexable files - with more detailed debugging
-                task_filter = progress.add_task("[green]Filtering indexable files...", total=len(all_files))
+                # Filter indexable files
+                task_filter = progress.add_task("[blue]Filtering indexable files...", total=1)
+                
                 indexable_files = []
-                file_extensions = {}  # Track extension counts
+                file_extensions = {}
                 
-                for f in all_files:
-                    progress.update(task_filter, advance=1)
-                    if self._should_index_file(f):
-                        indexable_files.append(f)
-                        ext = f.suffix.lower()
+                for file in all_files:
+                    file_path = str(file)
+                    
+                    # Skip hidden files and directories, but allow .codeai/repos
+                    parts = Path(file_path).parts
+                    if any(part.startswith('.') and part != '.codeai' and not (part == '.git' and 'repos' in parts) for part in parts):
+                        console.print(f"Skipping {file_path}: hidden directory or file")
+                        continue
+                    
+                    # Skip .git directory contents
+                    if '.git' in parts and 'repos' not in parts:
+                        console.print(f"Skipping {file_path}: git directory")
+                        continue
+                        
+                    # Get file extension
+                    ext = file.suffix.lower()
+                    
+                    # Track extension counts
+                    if ext:
                         file_extensions[ext] = file_extensions.get(ext, 0) + 1
+                    
+                    # Include files with supported extensions
+                    if ext in ['.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.cs', '.go', '.rs', '.md', '.txt']:
+                        console.print(f"Including file: {file_path} with extension {ext}")
+                        indexable_files.append(file)
                 
-                # Print detailed extension breakdown
-                progress.update(task_filter, completed=len(all_files))
-                console.print(f"[green]Found {len(indexable_files)} indexable files[/]")
+                progress.update(task_filter, advance=1)
+                
+                # Print extension breakdown
+                console.print(f"\nFound {len(indexable_files)} indexable files")
                 if file_extensions:
-                    console.print("[green]Extension breakdown:[/]")
+                    console.print("Extension breakdown:")
                     for ext, count in sorted(file_extensions.items(), key=lambda x: x[1], reverse=True):
-                        console.print(f"  [blue]{ext}:[/] {count} files")
-                else:
-                    console.print("[yellow]No valid file extensions found[/]")
+                        console.print(f"  {ext}: {count} files")
                 
                 # Additional debugging for file paths
                 if not indexable_files:
@@ -514,63 +530,14 @@ class CodebaseAnalyzer:
                     console.print("[bold red]Error: No indexable files found in the repository[/]")
                     raise ValueError("No indexable files found in the repository")
                 
-                # Process files
-                all_embeddings = []
-                all_documents = []
-                all_metadata = []
-                
-                # Create tasks for file processing and embedding generation
-                task_process = progress.add_task("[green]Processing files...", total=len(indexable_files))
-                task_embed = progress.add_task("[yellow]Generating embeddings...", total=len(indexable_files), visible=False)
-                
-                processed_files = 0
-                embedded_files = 0
-                error_files = 0
-                
-                # Process files one by one for better debugging
-                for file_idx, file_path in enumerate(indexable_files):
-                    try:
-                        progress.update(task_process, advance=1)
-                        console.print(f"[dim][{file_idx+1}/{len(indexable_files)}] Processing {file_path}[/]")
-                        
-                        chunks = self._chunk_file(file_path)
-                        if not chunks:
-                            console.print(f"[yellow]Warning: No chunks were created for {file_path}[/]")
-                            continue
-                            
-                        # Get the content from each chunk
-                        texts = [chunk.content for chunk in chunks]  # Changed from chunk["text"] to chunk.content
-                        
-                        # Get embeddings
-                        try:
-                            progress.update(task_embed, visible=True)
-                            embeddings = await self.ai_client.get_embeddings(texts)
-                            progress.update(task_embed, advance=1)
-                            
-                            if not embeddings:
-                                console.print(f"[yellow]Warning: No embeddings were returned for {file_path}[/]")
-                                continue
-                                
-                            all_embeddings.extend(embeddings)
-                            all_documents.extend(texts)
-                            all_metadata.extend([{
-                                "file": str(file_path.relative_to(self.path)),
-                                "start_line": chunk.metadata['start_line'],  # Changed from chunk["start_line"]
-                                "end_line": chunk.metadata['end_line']  # Changed from chunk["end_line"]
-                            } for chunk in chunks])
-                            
-                            embedded_files += 1
-                            console.print(f"[green]✓ Successfully embedded {file_path} ({len(chunks)} chunks)[/]")
-                        except Exception as e:
-                            error_files += 1
-                            console.print(f"[red]Error generating embeddings for {file_path}: {str(e)}[/]")
-                            traceback.print_exc()
-                    except Exception as e:
-                        error_files += 1
-                        console.print(f"[red]Error processing {file_path}: {str(e)}[/]")
-                        traceback.print_exc()
-                    
-                    processed_files += 1
+                # Process files in parallel and generate embeddings
+                all_embeddings, all_documents, all_metadata = await self.parallel_processor.process_files_parallel(
+                    files=indexable_files,
+                    chunk_size=self.config.get('chunk_size', 20),
+                    embedding_client=self.ai_client,
+                    batch_size=self.config.get('parallel', {}).get('batch_size', 10),
+                    progress=progress
+                )
                 
                 if not all_embeddings:
                     console.print("[bold red]Error: No embeddings were generated. Check file processing.[/]")
@@ -608,7 +575,7 @@ class CodebaseAnalyzer:
                     self.save_state()
                     progress.update(task_save, advance=1)
                     
-                    console.print(f"[bold green]Indexing complete! Processed {processed_files} files, embedded {embedded_files} files, encountered {error_files} errors.[/]")
+                    console.print(f"[bold green]Indexing complete! Processed {len(all_documents)} chunks from {len(indexable_files)} files.[/]")
                 except Exception as e:
                     console.print(f"[bold red]Error creating FAISS index: {str(e)}[/]")
                     traceback.print_exc()
@@ -707,6 +674,65 @@ class CodebaseAnalyzer:
             # Analyze query intent and context
             query_context = self._analyze_query(question)
             
+            # Check for existing file content from follow-up questions
+            if 'file_content' in query_context and query_context.get('is_file_query', False):
+                target_file_name = query_context.get('target_file')
+                file_content = query_context.get('file_content')
+                
+                self.console.print(f"[bold green]Using previously found file content for follow-up: {target_file_name}[/]")
+                direct_file_context = self._create_direct_file_context(target_file_name, file_content)
+                
+                # Generate response with direct file context
+                history_context = ""
+                if self.conversation_history:
+                    history_context = self._prepare_filtered_history(question, query_context)
+                
+                response = await self._generate_direct_file_response(
+                    question,
+                    direct_file_context,
+                    history_context,
+                    query_context
+                )
+                
+                # Update conversation history
+                self._update_conversation_history(question, response, query_context)
+                
+                return response
+            
+            # For file-specific queries, directly extract the file content if it exists
+            if query_context.get('is_file_query', False) and query_context.get('target_file'):
+                target_file_name = query_context.get('target_file')
+                file_content = self._find_and_extract_file_content(target_file_name)
+                
+                if file_content:
+                    # If file was found, create a special direct file context
+                    self.console.print(f"[bold green]File found directly: {target_file_name}[/]")
+                    direct_file_context = self._create_direct_file_context(target_file_name, file_content)
+                    
+                    # Save the file content in the query context for follow-up questions
+                    query_context['file_content'] = file_content
+                    
+                    # Generate response with direct file context
+                    history_context = ""
+                    if self.conversation_history:
+                        history_context = self._prepare_filtered_history(question, query_context)
+                    
+                    response = await self._generate_direct_file_response(
+                        question,
+                        direct_file_context,
+                        history_context,
+                        query_context
+                    )
+                    
+                    # Update conversation history
+                    self._update_conversation_history(question, response, query_context)
+                    
+                    return response
+                else:
+                    self.console.print(f"[yellow]File not found directly: {target_file_name}, continuing with semantic search[/]")
+                    # Continue with regular semantic search if file not found directly
+            
+            # Continue with regular semantic search
             # Get question embedding
             question_embedding = await self.ai_client.get_embeddings([question])
             question_vector = np.array(question_embedding).astype('float32')
@@ -808,7 +834,190 @@ class CodebaseAnalyzer:
             console.print(f"[bold red]Error generating response: {str(e)}[/]")
             traceback.print_exc()
             raise
-    
+
+    def _find_and_extract_file_content(self, target_file_name: str) -> Optional[str]:
+        """Find a file by name in the repository and extract its contents."""
+        try:
+            # Search for files that match the target name (case-insensitive)
+            matched_files = []
+            for root, _, files in os.walk(self.path):
+                for file in files:
+                    if file.lower() == target_file_name.lower():
+                        matched_files.append(Path(root) / file)
+            
+            if not matched_files:
+                # Try partial matching if no exact match
+                for root, _, files in os.walk(self.path):
+                    for file in files:
+                        if target_file_name.lower() in file.lower():
+                            matched_files.append(Path(root) / file)
+            
+            if matched_files:
+                # Use the first match (prioritize exact matches if any)
+                file_path = matched_files[0]
+                
+                # Log the file being used
+                console.print(f"[blue]Reading file: {file_path}[/]")
+                
+                # Read and return the content
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                return content
+            
+            return None
+        except Exception as e:
+            console.print(f"[yellow]Error reading file: {str(e)}[/]")
+            return None
+
+    def _create_direct_file_context(self, file_name: str, content: str) -> str:
+        """Create a context with the complete file content for direct file queries."""
+        lines = content.splitlines()
+        
+        # Create a nicely formatted context with the full file content
+        context_parts = [
+            f"## File: {file_name}",
+            "\nThis is the complete content of the requested file:\n"
+        ]
+        
+        # Add the file content with line numbers
+        context_parts.append("```python")
+        for i, line in enumerate(lines, 1):
+            context_parts.append(f"{i:4d}| {line}")
+        context_parts.append("```\n")
+        
+        # Try to add a brief analysis of the file structure
+        try:
+            file_type = Path(file_name).suffix.lstrip('.')
+            structure = extract_code_structure(content, file_type)
+            
+            if structure.imports:
+                context_parts.append("### Imports")
+                for imp in structure.imports:
+                    context_parts.append(f"- `{imp}`")
+                context_parts.append("")
+            
+            if structure.functions:
+                context_parts.append("### Functions")
+                for func in structure.functions:
+                    context_parts.append(f"- `{func}()`")
+                context_parts.append("")
+            
+            if structure.classes:
+                context_parts.append("### Classes")
+                for class_name, details in structure.classes.items():
+                    context_parts.append(f"- `{class_name}`")
+                    if details['methods']:
+                        context_parts.append("  Methods:")
+                        for method in details['methods']:
+                            context_parts.append(f"  - `{method}()`")
+                    if details['attributes']:
+                        context_parts.append("  Attributes:")
+                        for attr in details['attributes']:
+                            context_parts.append(f"  - `{attr}`")
+                context_parts.append("")
+        except Exception as e:
+            console.print(f"[yellow]Error analyzing file structure: {str(e)}[/]")
+        
+        return "\n".join(context_parts)
+
+    async def _generate_direct_file_response(self, question: str, file_context: str,
+                                          history_context: str, query_context: Dict) -> str:
+        """Generate response for direct file queries with complete file content."""
+        # Build a specialized prompt for file-specific questions
+        prompt_parts = [
+            "You are an AI assistant specializing in code analysis. You are examining a specific file requested by the user.",
+            "IMPORTANT: You MUST provide a COMPREHENSIVE and DETAILED analysis of this file. Your response should be extensive and thorough.",
+            f"The user is asking about the file: {query_context.get('target_file')}",
+            "CRITICAL INSTRUCTION: Your answers must be highly detailed - if your answer is too short or lacks sufficient detail, you may not be fulfilling your role properly.",
+            "Your response MUST include:"
+        ]
+        
+        # Add specialized instructions based on file type
+        file_extension = Path(query_context.get('target_file', '')).suffix.lower()
+        if file_extension == '.py':
+            prompt_parts.append("1. A comprehensive overview of this Python file's purpose and functionality")
+            prompt_parts.append("2. Detailed explanation of ALL functions, classes, and significant code blocks")
+            prompt_parts.append("3. In-depth analysis of the Python programming patterns and techniques used")
+            prompt_parts.append("4. Line-by-line explanation of the most important sections")
+        elif file_extension in ['.js', '.ts', '.jsx', '.tsx']:
+            prompt_parts.append("1. A comprehensive overview of this JavaScript/TypeScript file's purpose")
+            prompt_parts.append("2. Detailed explanation of ALL functions, components, and significant code blocks")
+            prompt_parts.append("3. In-depth analysis of the JavaScript/TypeScript programming patterns used")
+            prompt_parts.append("4. Line-by-line explanation of the most important sections")
+        else:
+            prompt_parts.append("1. A comprehensive overview of this file's purpose and functionality")
+            prompt_parts.append("2. Detailed explanation of ALL significant code sections and their purpose")
+            prompt_parts.append("3. In-depth analysis of the programming patterns and techniques used")
+            prompt_parts.append("4. Line-by-line explanation of the most important sections")
+        
+        # Add the question
+        prompt_parts.extend([
+            "\nUser's question:",
+            question,
+            "\nNOTE: Even for simple questions, you must provide a detailed and thorough analysis. Simple questions deserve comprehensive answers."
+        ])
+        
+        # Add the file context (which contains the complete file)
+        prompt_parts.extend([
+            "\nFile content:",
+            file_context
+        ])
+        
+        # Add conversation history if relevant
+        if history_context:
+            prompt_parts.extend([
+                "\nRelevant conversation history:",
+                history_context
+            ])
+        
+        # Add final instructions
+        prompt_parts.extend([
+            "\nCRITICAL INSTRUCTIONS FOR RESPONSE:",
+            "1. Your response MUST be at least 800 words in length to be sufficiently detailed",
+            "2. Start with a clear, extensive summary of what this specific file does",
+            "3. Explain ALL the actual code snippets from the file, showing the most important parts",
+            "4. Provide extremely detailed explanations of how the code in this file works",
+            "5. Analyze the implementation details, algorithmic choices, and code structure",
+            "6. Reference specific line numbers from the file when explaining code",
+            "7. Format your response with proper markdown for readability",
+            "8. Include code examples with explanations for complex parts",
+            "9. Make sure your response directly answers the user's question about this file",
+            "10. If you find yourself providing a short answer, EXPAND it with more analysis, examples, and details"
+        ])
+        
+        enhanced_prompt = "\n".join(filter(None, prompt_parts))
+        
+        # Generate response with enhanced prompt
+        response = await self.ai_client.get_completion(
+            enhanced_prompt,
+            temperature=self.config.get('temperature', 0.7),
+            max_tokens=4000  # Ensure we have enough tokens for a detailed response
+        )
+        
+        # Check if response is too short and try again with stronger instructions if needed
+        if len(response.split()) < 200:  # If response is less than ~200 words
+            console.print("[yellow]Response too short, requesting a more detailed response...[/]")
+            
+            # Add even stronger instructions for detailed response
+            prompt_parts.append("\nWARNING: Your previous answer was too brief. You MUST provide a MUCH more detailed analysis.")
+            prompt_parts.append("Make sure to cover EVERY function, class, and code block in the file with thorough explanation.")
+            prompt_parts.append("Your response should be at least 1000 words to be considered adequate.")
+            
+            enhanced_prompt = "\n".join(filter(None, prompt_parts))
+            
+            # Try again with stronger instructions
+            response = await self.ai_client.get_completion(
+                enhanced_prompt,
+                temperature=self.config.get('temperature', 0.8),  # Slightly higher temperature
+                max_tokens=4000
+            )
+        
+        # Format the response for display
+        self._format_output(response, f"Analysis of {query_context.get('target_file')}")
+        
+        return response
+
     def _calculate_chunk_relevance(self, chunk: SemanticChunk, query_context: Dict, embedding_distance: float) -> float:
         """Calculate chunk relevance score using multiple factors."""
         # Start with embedding similarity (convert distance to similarity)
@@ -816,6 +1025,17 @@ class CodebaseAnalyzer:
         
         # Boost by chunk importance
         score *= (1.0 + chunk.importance_score * 0.5)
+        
+        # Give substantial boost to exact file matches when asking about specific files
+        if query_context.get('is_file_query', False) and query_context.get('target_file'):
+            chunk_file = Path(chunk.metadata.get('file', '')).name
+            target_file = query_context.get('target_file')
+            
+            # Direct file match gets a very large boost
+            if chunk_file.lower() == target_file.lower():
+                # Apply 5x boost for direct file match
+                score *= 5.0
+                console.print(f"[green]Boosting relevance for file match: {chunk_file}[/]")
         
         # Context match boost
         if query_context['type'] == 'explain' and chunk.metadata.get('has_docstring'):
@@ -1020,6 +1240,11 @@ class CodebaseAnalyzer:
         """Determine optimal number of chunks based on query complexity."""
         base_count = 5  # Start with a smaller base
         
+        # Always use more chunks for file-specific queries
+        if context.get('is_file_query', False):
+            base_count = 10  # Higher base count for file queries
+            self.console.print(f"[blue]File-specific query detected for {context.get('target_file')}. Using increased chunk count.[/]")
+        
         # Adjust for query type
         type_multipliers = {
             'explain': 2.0,    # Need more context for explanations
@@ -1042,7 +1267,11 @@ class CodebaseAnalyzer:
         # Calculate final count
         chunk_count = int(base_count * multiplier * (1 + complexity_score))
         
-        # Keep within reasonable bounds
+        # Different bounds for file-specific queries
+        if context.get('is_file_query', False):
+            return min(max(chunk_count, 10), 30)  # Higher minimum and maximum for file queries
+        
+        # Keep within reasonable bounds for general queries
         return min(max(chunk_count, 3), 20)  # Tighter bounds for more focused results
 
     async def _generate_enhanced_response(self, question: str, context: str,
@@ -1050,8 +1279,11 @@ class CodebaseAnalyzer:
         """Generate response with enhanced prompt engineering"""
         # Build enhanced prompt
         prompt_parts = [
-            "You are an AI assistant analyzing code. Focus only on the provided context and be direct and accurate.",
+            "You are an AI assistant analyzing code. Your responses should be COMPREHENSIVE, DETAILED and THOROUGH.",
+            "IMPORTANT: You MUST provide detailed code explanations with examples. Your responses should be extensive and complete.",
+            "When discussing files, show their actual contents and explain the key components in depth.",
             f"Question type: {query_context['type']}",
+            "CRITICAL INSTRUCTION: Your answers must be highly detailed - if your answer is too short or lacks sufficient detail, you may not be fulfilling your role properly."
         ]
         
         # Add focus areas if any
@@ -1068,13 +1300,86 @@ class CodebaseAnalyzer:
         prompt_parts.extend([
             "\nQuestion:",
             question,
+            "\nNOTE: Even for simple questions, you must provide a detailed and thorough analysis. Simple questions deserve comprehensive answers.",
+            "\nYour response MUST include:",
+            "1. Relevant code snippets with comprehensive explanations",
+            "2. File locations and line numbers with detailed context",
+            "3. Detailed explanation of how the code works, its purposes and functionality",
+            "4. Analysis of any important dependencies or related components",
+            "5. Examples and illustrations where helpful"
         ])
         
         # Check if context is too large and needs to be truncated
         if len(context) > 10000:  # Reduced from 12000 to be more conservative
             console.print("[yellow]Context is very large, truncating to fit token limits[/]")
-            # Simple truncation approach - keep the beginning which usually has the most relevant info
-            context = context[:10000] + "\n\n[Context truncated due to size]"
+            
+            # Intelligent truncation strategy
+            if query_context.get('is_file_query', False) and query_context.get('target_file'):
+                target_file = query_context.get('target_file')
+                sections = context.split("### File: ")
+                
+                # Start with the header
+                if sections[0].startswith("## Code Context Summary"):
+                    truncated_context = [sections[0]]
+                else:
+                    truncated_context = ["## Code Context Summary\n"]
+                
+                # Separate target file sections from others
+                target_sections = []
+                other_sections = []
+                
+                for section in sections[1:]:
+                    if target_file.lower() in section.lower():
+                        target_sections.append(section)
+                    else:
+                        other_sections.append(section)
+                
+                # Add target file sections first
+                for section in target_sections:
+                    truncated_context.append("### File: " + section)
+                
+                # Add other sections if there's space
+                remaining_length = 10000 - len("\n".join(truncated_context))
+                for section in other_sections:
+                    section_text = "### File: " + section
+                    if len(section_text) < remaining_length:
+                        truncated_context.append(section_text)
+                        remaining_length -= len(section_text)
+                    else:
+                        break
+                
+                # Combine sections
+                context = "\n".join(truncated_context)
+                
+                # Final check if still too long
+                if len(context) > 10000:
+                    context = context[:10000] + "\n\n[Context truncated due to size]"
+            else:
+                # General truncation approach
+                sections = context.split("### File: ")
+                
+                # Keep the header
+                if sections[0].startswith("## Code Context Summary"):
+                    truncated_context = [sections[0]]
+                else:
+                    truncated_context = ["## Code Context Summary\n"]
+                
+                # Add sections until limit reached
+                remaining_length = 10000 - len(truncated_context[0])
+                for section in sections[1:]:
+                    section_text = "### File: " + section
+                    if len(section_text) < remaining_length:
+                        truncated_context.append(section_text)
+                        remaining_length -= len(section_text)
+                    else:
+                        break
+                
+                # Combine sections
+                context = "\n".join(truncated_context)
+                
+                # Final check if still too long
+                if len(context) > 10000:
+                    context = context[:10000] + "\n\n[Context truncated due to size]"
         
         # Add the context
         prompt_parts.extend([
@@ -1089,9 +1394,19 @@ class CodebaseAnalyzer:
                 history_context
             ])
         
-        # Add final instructions - keeping it simpler
+        # Add final instructions for comprehensive response
         prompt_parts.extend([
-            "\nFormat your response with markdown. Include file paths and line numbers when referencing code."
+            "\nCRITICAL INSTRUCTIONS FOR RESPONSE:",
+            "1. Your response MUST be at least 600 words in length to be sufficiently detailed",
+            "2. Start with a clear, extensive overview of the relevant code",
+            "3. Include and thoroughly explain actual code snippets from the files",
+            "4. Provide extremely detailed explanations of how the code works",
+            "5. Analyze implementation details, algorithmic choices, and code structure",
+            "6. Reference specific file paths and line numbers",
+            "7. Highlight any important patterns, edge cases or considerations",
+            "8. Format your response with markdown for readability",
+            "9. MAKE SURE TO INCLUDE ALL RELEVANT CODE SNIPPETS FROM THE CONTEXT",
+            "10. If you find yourself providing a short answer, EXPAND it with more analysis, examples, and details"
         ])
         
         enhanced_prompt = "\n".join(filter(None, prompt_parts))
@@ -1099,7 +1414,26 @@ class CodebaseAnalyzer:
         # Generate response with enhanced prompt
         response = await self.ai_client.get_completion(
             enhanced_prompt,
-            temperature=self.config.get('temperature', 0.7)
+            temperature=self.config.get('temperature', 0.7),
+            max_tokens=4000  # Ensure we have enough tokens for a detailed response
+        )
+        
+        # Check if response is too short and try again with stronger instructions if needed
+        if len(response.split()) < 200:  # If response is less than ~200 words
+            console.print("[yellow]Response too short, requesting a more detailed response...[/]")
+            
+            # Add even stronger instructions for detailed response
+            prompt_parts.append("\nWARNING: Your previous answer was too brief. You MUST provide a MUCH more detailed analysis.")
+            prompt_parts.append("Make sure to cover ALL relevant code components with thorough explanation.")
+            prompt_parts.append("Your response should be at least 800 words to be considered adequate.")
+            
+            enhanced_prompt = "\n".join(filter(None, prompt_parts))
+            
+            # Try again with stronger instructions
+            response = await self.ai_client.get_completion(
+                enhanced_prompt,
+                temperature=self.config.get('temperature', 0.8),  # Slightly higher temperature
+                max_tokens=4000
         )
         
         # Format the response for display
@@ -1154,6 +1488,49 @@ class CodebaseAnalyzer:
 
     def _prepare_filtered_history(self, question: str, query_context: Dict) -> str:
         """Prepare filtered conversation history for context"""
+        # For file-specific follow-up questions, try to find previous exchanges about the same file
+        if query_context.get('is_file_query', False) and query_context.get('target_file'):
+            # Current file query
+            target_file = query_context.get('target_file').lower()
+            file_specific_history = []
+            
+            # Look for previous exchanges about this file
+            for exchange in self.conversation_history:
+                exchange_context = exchange.get('context', {})
+                if exchange_context.get('is_file_query') and exchange_context.get('target_file'):
+                    if exchange_context.get('target_file').lower() == target_file:
+                        file_specific_history.append(exchange)
+            
+            if file_specific_history:
+                self.console.print(f"[blue]Found {len(file_specific_history)} previous exchanges about {target_file}[/]")
+                return self._format_conversation_history(file_specific_history)
+        
+        # For vague follow-up questions like "explain this", "tell me more", etc.
+        follow_up_indicators = ['this', 'that', 'these', 'those', 'it', 'them', 'more', 'explain']
+        is_follow_up = any(word in question.lower().split() for word in follow_up_indicators) and len(question.split()) < 6
+        
+        if is_follow_up and self.conversation_history:
+            # Use the most recent exchange as context
+            self.console.print("[blue]Detected follow-up question, using most recent exchange for context[/]")
+            last_exchange = self.conversation_history[-1]
+            follow_up_context = query_context.copy()
+            
+            # Copy relevant context from the previous question
+            prev_context = last_exchange.get('context', {})
+            if prev_context.get('is_file_query') and prev_context.get('target_file'):
+                follow_up_context['is_file_query'] = True
+                follow_up_context['target_file'] = prev_context.get('target_file')
+                query_context.update(follow_up_context)  # Update the current query context
+                
+                # Use this opportunity to try direct file access again for the follow-up
+                target_file_name = prev_context.get('target_file')
+                file_content = self._find_and_extract_file_content(target_file_name)
+                if file_content:
+                    self.console.print(f"[bold green]Found file for follow-up question: {target_file_name}[/]")
+                    query_context['file_content'] = file_content
+            
+            return self._format_conversation_history([last_exchange])
+
         if 'keywords' in query_context and query_context['keywords']:
             # Filter by keywords if available
             relevant_history = [
@@ -1164,7 +1541,21 @@ class CodebaseAnalyzer:
             # Otherwise use all history up to a limit
             relevant_history = self.conversation_history[-self.config.get('max_history', 5):]
             
-        return self._prepare_conversation_history()
+        return self._format_conversation_history(relevant_history)
+
+    def _format_conversation_history(self, exchanges: List[Dict]) -> str:
+        """Format a list of conversation exchanges for context"""
+        if not exchanges:
+            return ""
+            
+        history_parts = []
+        for i, exchange in enumerate(exchanges):
+            question_text = exchange['question'].strip()
+            answer_text = exchange['answer'].strip()
+            history_parts.append(f"Question {i+1}:\n{question_text}")
+            history_parts.append(f"Answer {i+1}:\n{answer_text}")
+        
+        return "\n\n".join(history_parts)
 
     def _analyze_query(self, question: str) -> Dict:
         """Analyze query to extract semantic information"""
@@ -1178,7 +1569,9 @@ class CodebaseAnalyzer:
                 'functions': set(),
                 'variables': set(),
                 'imports': set()
-            }
+            },
+            'is_file_query': False,  # Flag for file-specific queries
+            'target_file': None      # Target file if specified
         }
         
         # Identify query type
@@ -1193,6 +1586,24 @@ class CodebaseAnalyzer:
         for qtype, pattern in type_patterns.items():
             if re.search(pattern, question.lower()):
                 context['type'] = qtype
+                break
+        
+        # Check for file-specific queries (with file extensions)
+        file_patterns = [
+            r'(?:the|a|an)?\s*([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)\s*(?:file|script|module)?',  # matches example.py
+            r'(?:file|script|module)\s+(?:named|called)?\s*([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)', # matches file named example.py
+            r'([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)\s*(?:file|script|module|code)'  # matches example.py file
+        ]
+        
+        for pattern in file_patterns:
+            matches = re.findall(pattern, question, re.IGNORECASE)
+            if matches:
+                context['is_file_query'] = True
+                context['target_file'] = matches[0]
+                # Add file name to focus
+                context['focus'].append(('file', matches[0]))
+                # Add file name to keywords with high priority
+                context['keywords'].add(matches[0])
                 break
         
         # Extract code elements
@@ -1246,20 +1657,6 @@ class CodebaseAnalyzer:
         
         return context
     
-    def _prepare_conversation_history(self) -> str:
-        """Format conversation history for context"""
-        if not self.conversation_history:
-            return ""
-            
-        history_parts = []
-        for i, exchange in enumerate(self.conversation_history):
-            question_text = exchange['question'].strip()
-            answer_text = exchange['answer'].strip()
-            history_parts.append(f"Question {i+1}:\n{question_text}")
-            history_parts.append(f"Answer {i+1}:\n{answer_text}")
-            
-        return "\n\n".join(history_parts)
-    
     def _keyword_search(self, query: str) -> List[str]:
         """Search for files by keywords in query"""
         # Extract potential file-related keywords
@@ -1298,9 +1695,14 @@ class CodebaseAnalyzer:
         
         file_extension = file_path.suffix.lower()
         
-        # Skip hidden directories (but not the .codeai directory itself)
-        if any(part.startswith('.') for part in parts) and not (len(parts) == 1 and parts[0] == '.env'):
+        # Skip hidden directories (but allow .codeai/repos and .git in repos)
+        if any(part.startswith('.') and part != '.codeai' and not (part == '.git' and 'repos' in parts) for part in parts):
             console.print(f"[dim]Skipping {rel_path}: hidden directory or file[/]")
+            return False
+            
+        # Skip .git directory contents unless in repos
+        if '.git' in parts and 'repos' not in parts:
+            console.print(f"[dim]Skipping {rel_path}: git directory[/]")
             return False
         
         IGNORE_DIRS = {'node_modules', 'venv', 'env', 'build', 'dist', '__pycache__'}
