@@ -2181,3 +2181,272 @@ class CodebaseAnalyzer:
             console.print(f"[bold red]Error refreshing index: {str(e)}[/]")
             traceback.print_exc()
             raise
+
+    async def complete_code(self, code_prefix: str, file_path: str = None, line_number: int = None) -> str:
+        """Provide real-time code completion suggestions."""
+        prompt_parts = [
+            "You are an expert programmer providing real-time code completion.",
+            "Complete the code in a way that follows the existing patterns and style.",
+            f"Current file: {file_path}" if file_path else "",
+            f"Line number: {line_number}" if line_number else "",
+            "\nCode prefix:",
+            code_prefix,
+            "\nProvide only the completion, no explanations."
+        ]
+
+        # Get file context if available
+        if file_path:
+            try:
+                with open(file_path, 'r') as f:
+                    file_content = f.read()
+                prompt_parts.extend([
+                    "\nFile context:",
+                    file_content
+                ])
+            except Exception:
+                pass
+
+        prompt = "\n".join(filter(None, prompt_parts))
+        
+        completion = await self.ai_client.get_completion(
+            prompt,
+            temperature=0.2,  # Lower temperature for more focused completions
+            max_tokens=500
+        )
+        
+        return completion.strip()
+
+    async def suggest_inline(self, file_path: str, line_number: int, line_content: str) -> List[str]:
+        """Provide inline code suggestions based on current line."""
+        prompt_parts = [
+            "You are an expert programmer providing inline code suggestions.",
+            "Suggest 3 possible ways to complete or improve the current line of code.",
+            "Consider the context and common programming patterns.",
+            f"File: {file_path}",
+            f"Line {line_number}: {line_content}",
+            "\nProvide exactly 3 suggestions, one per line, no explanations."
+        ]
+
+        # Get surrounding context
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                start = max(0, line_number - 5)
+                end = min(len(lines), line_number + 5)
+                context = ''.join(lines[start:end])
+                prompt_parts.extend([
+                    "\nSurrounding context:",
+                    context
+                ])
+        except Exception:
+            pass
+
+        prompt = "\n".join(filter(None, prompt_parts))
+        
+        suggestions = await self.ai_client.get_completion(
+            prompt,
+            temperature=0.3,
+            max_tokens=200
+        )
+        
+        return [s.strip() for s in suggestions.strip().split('\n') if s.strip()]
+
+    async def explain_code(self, code: str, context: str = None, detail_level: str = "medium") -> str:
+        """Explain code in a natural, conversational way."""
+        prompt_parts = [
+            "You are an expert programmer explaining code to a fellow developer.",
+            "Explain the code in a natural, conversational way.",
+            "Focus on the key concepts and patterns.",
+            f"Detail level: {detail_level}",
+            "\nCode to explain:",
+            code
+        ]
+
+        if context:
+            prompt_parts.extend([
+                "\nAdditional context:",
+                context
+            ])
+
+        prompt_parts.extend([
+            "\nProvide your explanation in a conversational way, like you're talking to a colleague.",
+            "Include:",
+            "1. What the code does at a high level",
+            "2. Any interesting patterns or techniques used",
+            "3. Potential improvements or considerations",
+            "4. Examples of usage if helpful"
+        ])
+
+        prompt = "\n".join(filter(None, prompt_parts))
+        
+        explanation = await self.ai_client.get_completion(
+            prompt,
+            temperature=0.7,  # Higher temperature for more natural language
+            max_tokens=1000
+        )
+        
+        return explanation.strip()
+
+    async def complete_realtime(self, file_path: str, cursor_position: Dict[str, int], current_content: str) -> Dict[str, any]:
+        """Provide real-time code completion as you type.
+        
+        Args:
+            file_path: Path to the current file
+            cursor_position: Dict containing 'line' and 'column' numbers
+            current_content: Current content of the file up to cursor position
+            
+        Returns:
+            Dict containing completion suggestions and metadata
+        """
+        try:
+            # Get the current line and prefix
+            lines = current_content.split('\n')
+            current_line = lines[cursor_position['line'] - 1] if cursor_position['line'] <= len(lines) else ""
+            prefix = current_line[:cursor_position['column']]
+            
+            # Get file context (previous few lines)
+            context_start = max(0, cursor_position['line'] - 5)
+            context_lines = lines[context_start:cursor_position['line']]
+            context = '\n'.join(context_lines)
+            
+            prompt_parts = [
+                "You are an expert programmer providing real-time code completion.",
+                "Complete the current line of code naturally, following the codebase patterns.",
+                f"File: {file_path}",
+                f"Current position: Line {cursor_position['line']}, Column {cursor_position['column']}",
+                "\nContext (previous lines):",
+                context,
+                "\nCurrent line prefix:",
+                prefix,
+                "\nProvide completion that would make sense here. Return ONLY the completion text."
+            ]
+            
+            prompt = "\n".join(filter(None, prompt_parts))
+            
+            completion = await self.ai_client.get_completion(
+                prompt,
+                temperature=0.2,
+                max_tokens=100
+            )
+            
+            return {
+                "completion": completion.strip(),
+                "range": {
+                    "start": {"line": cursor_position['line'], "column": cursor_position['column']},
+                    "end": {"line": cursor_position['line'], "column": cursor_position['column'] + len(completion.strip())}
+                },
+                "source": "ai_completion"
+            }
+            
+        except Exception as e:
+            console.print(f"[bold red]Error generating real-time completion: {str(e)}[/]")
+            return {"completion": "", "error": str(e)}
+
+    async def suggest_inline_realtime(self, file_path: str, cursor_position: Dict[str, int], current_content: str) -> List[Dict[str, any]]:
+        """Provide real-time inline suggestions as you type.
+        
+        Args:
+            file_path: Path to the current file
+            cursor_position: Dict containing 'line' and 'column' numbers
+            current_content: Current content of the file
+            
+        Returns:
+            List of suggestion objects with completion text and metadata
+        """
+        try:
+            # Get the current line
+            lines = current_content.split('\n')
+            current_line = lines[cursor_position['line'] - 1] if cursor_position['line'] <= len(lines) else ""
+            
+            # Get surrounding context
+            context_start = max(0, cursor_position['line'] - 5)
+            context_end = min(len(lines), cursor_position['line'] + 5)
+            context = '\n'.join(lines[context_start:context_end])
+            
+            prompt_parts = [
+                "You are an expert programmer providing inline code suggestions.",
+                "Provide exactly 3 alternative ways to write or complete the current line.",
+                "Each suggestion should be a complete, working line of code.",
+                "Follow the codebase patterns and best practices.",
+                "Return ONLY the 3 suggestions, one per line, without any additional text or formatting.",
+                f"File: {file_path}",
+                f"Current line: {current_line}",
+                "\nSurrounding context:",
+                context
+            ]
+            
+            prompt = "\n".join(filter(None, prompt_parts))
+            
+            suggestions_text = await self.ai_client.get_completion(
+                prompt,
+                temperature=0.3,
+                max_tokens=200
+            )
+            
+            # Process suggestions
+            suggestions = []
+            for i, suggestion in enumerate(suggestions_text.strip().split('\n')[:3], 1):
+                if suggestion.strip():
+                    suggestions.append({
+                        "text": suggestion.strip(),
+                        "range": {
+                            "start": {"line": cursor_position['line'], "column": 0},
+                            "end": {"line": cursor_position['line'], "column": len(current_line)}
+                        },
+                        "type": "inline_suggestion",
+                        "id": f"suggestion_{i}",
+                        "score": self._calculate_suggestion_score(suggestion.strip(), current_line, context)
+                    })
+            
+            # Sort suggestions by score
+            suggestions.sort(key=lambda x: x['score'], reverse=True)
+            return suggestions
+            
+        except Exception as e:
+            console.print(f"[bold red]Error generating inline suggestions: {str(e)}[/]")
+            return []
+            
+    def _calculate_suggestion_score(self, suggestion: str, current_line: str, context: str) -> float:
+        """Calculate a relevance score for a suggestion.
+        
+        Args:
+            suggestion: The suggested code line
+            current_line: The current line being edited
+            context: Surrounding code context
+            
+        Returns:
+            float: Score between 0 and 1, higher is better
+        """
+        score = 0.0
+        
+        # Similarity to current line (if it exists)
+        if current_line:
+            # Basic character-level similarity
+            common_chars = sum(1 for c in suggestion if c in current_line)
+            score += 0.3 * (common_chars / max(len(suggestion), len(current_line)))
+        
+        # Context matching
+        context_tokens = set(context.split())
+        suggestion_tokens = set(suggestion.split())
+        if context_tokens:
+            matching_tokens = suggestion_tokens.intersection(context_tokens)
+            score += 0.3 * (len(matching_tokens) / len(suggestion_tokens) if suggestion_tokens else 0)
+        
+        # Code style consistency
+        style_score = 0.0
+        # Indentation matching
+        if current_line:
+            curr_indent = len(current_line) - len(current_line.lstrip())
+            sugg_indent = len(suggestion) - len(suggestion.lstrip())
+            if curr_indent == sugg_indent:
+                style_score += 0.1
+        
+        # Common coding patterns
+        if suggestion.endswith(';') and context.count(';') > context.count('\n') / 2:
+            style_score += 0.1
+        if suggestion.endswith(')') and suggestion.count('(') == suggestion.count(')'):
+            style_score += 0.1
+        
+        score += 0.4 * style_score
+        
+        return min(1.0, score)

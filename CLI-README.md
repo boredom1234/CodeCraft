@@ -6,6 +6,9 @@ A powerful AI-powered command-line tool for understanding, analyzing, and explor
 
 - 🔍 **Code Indexing**: Index local or GitHub repositories for AI-powered search
 - 💬 **Intelligent Querying**: Ask questions about your codebase in natural language
+- ✨ **Code Completion**: Real-time, context-aware code suggestions
+- 💡 **Smart Suggestions**: Multiple intelligent suggestions for improving your code
+- 📝 **Code Explanations**: Natural, conversational explanations of code blocks
 - 📊 **Multiple Projects**: Manage different codebases through the project system
 - 🧠 **Contextual Memory**: Maintains conversation history for better follow-up questions
 - 🔄 **GitHub Integration**: Pull and analyze repositories directly from GitHub
@@ -111,6 +114,36 @@ python cli.py ask [--project PROJECT_NAME]
 
 You'll be prompted to enter your question about the codebase.
 
+#### Get Code Completions
+
+```bash
+# Get completion suggestions for a specific line
+python cli.py complete path/to/file.py --line 42
+```
+
+This provides context-aware code completions based on your codebase.
+
+#### Get Inline Suggestions
+
+```bash
+# Get multiple suggestions for improving a line of code
+python cli.py suggest path/to/file.py --line 42
+```
+
+This offers multiple ways to complete or improve your code.
+
+#### Get Code Explanations
+
+```bash
+# Get natural language explanations of code blocks
+python cli.py explain path/to/file.py --start-line 42 --end-line 50 --detail high
+```
+
+Options for --detail:
+- low: Quick overview
+- medium: Balanced explanation
+- high: In-depth analysis
+
 #### Interactive mode
 
 ```bash
@@ -192,6 +225,9 @@ python cli.py ask
 | `configure` | Set up API keys and configuration |
 | `create-project PROJECT_NAME` | Create a new project or switch to existing one |
 | `init SOURCE [--github] [--project PROJECT_NAME]` | Initialize and index a codebase |
+| `complete FILE_PATH [--line LINE_NUMBER]` | Get context-aware code completions |
+| `suggest FILE_PATH --line LINE_NUMBER` | Get intelligent code suggestions |
+| `explain FILE_PATH [--start-line START] [--end-line END] [--detail LEVEL]` | Get natural code explanations |
 | `list-projects` | List all available projects |
 | `switch-project PROJECT_NAME` | Switch to an existing project |
 | `ask [--interactive] [--chunks NUM] [--reset] [--project PROJECT_NAME]` | Ask questions about the codebase |

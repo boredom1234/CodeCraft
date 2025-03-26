@@ -11,6 +11,7 @@ from rich.prompt import Prompt, Confirm
 import yaml
 from dotenv import load_dotenv
 from analyzer import CodebaseAnalyzer
+import time
 
 console = Console()
 
@@ -863,6 +864,274 @@ def refresh(project: str = None, summary: bool = False):
         console.print(f"[bold red]Error: {str(e)}[/]")
         traceback.print_exc()
         exit(1)
+
+@cli.command()
+@click.argument('file_path', type=click.Path(exists=True))
+@click.option('--line', '-l', type=int, help='Line number for context')
+def complete(file_path: str, line: int = None):
+    """Get AI-powered code completions.
+    
+    This command provides intelligent code completions based on the current file
+    and optional line number context.
+    """
+    try:
+        analyzer = load_analyzer_state()
+        
+        # Get the current line content if line number is provided
+        current_line = ""
+        if line:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                if 0 <= line - 1 < len(lines):
+                    current_line = lines[line - 1].strip()
+
+        async def get_completion():
+            completion = await analyzer.complete_code(current_line, file_path, line)
+            console.print("\n[bold green]Suggested completion:[/]")
+            console.print(completion)
+
+        asyncio.run(get_completion())
+        
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+        traceback.print_exc()
+
+@cli.command()
+@click.argument('file_path', type=click.Path(exists=True))
+@click.option('--line', '-l', type=int, required=True, help='Line number to get suggestions for')
+def suggest(file_path: str, line: int):
+    """Get inline code suggestions.
+    
+    This command provides intelligent suggestions for the current line
+    of code, offering multiple ways to complete or improve it.
+    """
+    try:
+        analyzer = load_analyzer_state()
+        
+        # Get the current line content
+        with open(file_path, 'r') as f:
+            lines = f.readlines()
+            if 0 <= line - 1 < len(lines):
+                current_line = lines[line - 1].strip()
+            else:
+                console.print("[red]Invalid line number[/]")
+                return
+
+        async def get_suggestions():
+            suggestions = await analyzer.suggest_inline(file_path, line, current_line)
+            console.print("\n[bold green]Suggestions:[/]")
+            for i, suggestion in enumerate(suggestions, 1):
+                console.print(f"\n{i}. {suggestion}")
+
+        asyncio.run(get_suggestions())
+        
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+        traceback.print_exc()
+
+@cli.command()
+@click.argument('file_path', type=click.Path(exists=True))
+@click.option('--line', '-l', type=int, required=True, help='Line number')
+@click.option('--watch', '-w', is_flag=True, help='Watch mode - continuously provide suggestions')
+def complete_realtime(file_path: str, line: int, watch: bool = False):
+    """Get real-time code completions as you type.
+    
+    This command provides intelligent code completions in real-time,
+    taking into account your current cursor position and file context.
+    
+    Examples:
+        # Get completion at specific position
+        python cli.py complete-realtime path/to/file.py --line 42
+        
+        # Watch mode (continuous suggestions)
+        python cli.py complete-realtime path/to/file.py --line 42 --watch
+    """
+    try:
+        analyzer = load_analyzer_state()
+        last_content = None
+        last_line_content = None
+        
+        async def get_realtime_completion():
+            nonlocal last_content, last_line_content
+            
+            # Read current file content
+            with open(file_path, 'r') as f:
+                current_content = f.read()
+                
+            # Get the current line
+            lines = current_content.split('\n')
+            current_line = lines[line - 1] if 0 <= line - 1 < len(lines) else ""
+            
+            # Check if content has changed
+            if current_line == last_line_content:
+                return
+                
+            last_content = current_content
+            last_line_content = current_line
+            
+            cursor_position = {'line': line, 'column': 0}
+            completion = await analyzer.complete_realtime(file_path, cursor_position, current_content)
+            
+            if 'error' in completion:
+                console.print(f"[red]Error: {completion['error']}[/]")
+                return
+            
+            # Clear previous output (only in watch mode)
+            if watch:
+                console.clear()
+                console.print("[bold blue]Watching for changes... (Ctrl+C to stop)[/]\n")
+            
+            console.print("[bold blue]Current line:[/]")
+            console.print(f"[dim]{current_line}[/]")
+            
+            console.print("\n[bold green]Real-time completion:[/]")
+            console.print(completion['completion'])
+        
+        if watch:
+            try:
+                console.print("[bold blue]Watching for changes... (Ctrl+C to stop)[/]")
+                while True:
+                    asyncio.run(get_realtime_completion())
+                    time.sleep(0.5)  # Check every half second
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Stopped watching[/]")
+        else:
+            asyncio.run(get_realtime_completion())
+            
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+        traceback.print_exc()
+
+@cli.command()
+@click.argument('file_path', type=click.Path(exists=True))
+@click.option('--line', '-l', type=int, required=True, help='Line number')
+@click.option('--watch', '-w', is_flag=True, help='Watch mode - continuously provide suggestions')
+@click.option('--threshold', '-t', type=float, default=0.5, help='Minimum relevance score threshold (0-1)')
+def suggest_realtime(file_path: str, line: int, watch: bool = False, threshold: float = 0.5):
+    """Get real-time inline code suggestions.
+    
+    This command provides multiple intelligent suggestions for improving
+    or completing your code in real-time. Each suggestion comes with
+    a relevance score indicating how well it matches the context.
+    
+    Examples:
+        # Get suggestions for a specific line
+        python cli.py suggest-realtime path/to/file.py --line 42
+        
+        # Watch mode with custom relevance threshold
+        python cli.py suggest-realtime path/to/file.py --line 42 --watch --threshold 0.7
+    """
+    try:
+        analyzer = load_analyzer_state()
+        last_content = None
+        last_line_content = None
+        
+        async def get_realtime_suggestions():
+            nonlocal last_content, last_line_content
+            
+            # Read current file content
+            with open(file_path, 'r') as f:
+                current_content = f.read()
+                
+            # Get the current line for display
+            lines = current_content.split('\n')
+            current_line = lines[line - 1] if 0 <= line - 1 < len(lines) else ""
+            
+            # Check if content has changed
+            if current_line == last_line_content:
+                return
+            
+            last_content = current_content
+            last_line_content = current_line
+            
+            cursor_position = {'line': line, 'column': 0}
+            suggestions = await analyzer.suggest_inline_realtime(file_path, cursor_position, current_content)
+            
+            if not suggestions:
+                console.print("[yellow]No suggestions available[/]")
+                return
+            
+            # Filter suggestions by threshold
+            suggestions = [s for s in suggestions if s['score'] >= threshold]
+            
+            if not suggestions:
+                console.print(f"[yellow]No suggestions met the minimum relevance threshold of {threshold}[/]")
+                return
+            
+            # Clear previous output (only in watch mode)
+            if watch:
+                console.clear()
+                console.print("[bold blue]Watching for changes... (Ctrl+C to stop)[/]\n")
+            
+            console.print("[bold blue]Current line:[/]")
+            console.print(f"[dim]{current_line}[/]")
+            
+            console.print("\n[bold green]Real-time suggestions:[/]")
+            for i, suggestion in enumerate(suggestions, 1):
+                # Calculate color based on score
+                score = suggestion['score']
+                if score >= 0.8:
+                    color = "green"
+                elif score >= 0.6:
+                    color = "blue"
+                else:
+                    color = "yellow"
+                
+                # Format the suggestion with score
+                console.print(f"\n{i}. [{color}]{suggestion['text']}[/]")
+                console.print(f"   [dim]Relevance: {score:.2%}[/]")
+        
+        if watch:
+            try:
+                console.print("[bold blue]Watching for changes... (Ctrl+C to stop)[/]")
+                while True:
+                    asyncio.run(get_realtime_suggestions())
+                    time.sleep(0.5)  # Check every half second
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Stopped watching[/]")
+        else:
+            asyncio.run(get_realtime_suggestions())
+            
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+        traceback.print_exc()
+
+@cli.command()
+@click.argument('file_path', type=click.Path(exists=True))
+@click.option('--start-line', '-s', type=int, help='Start line number')
+@click.option('--end-line', '-e', type=int, help='End line number')
+@click.option('--detail', '-d', type=click.Choice(['low', 'medium', 'high']), default='medium', help='Level of detail in explanation')
+def explain(file_path: str, start_line: int = None, end_line: int = None, detail: str = 'medium'):
+    """Get natural language explanation of code.
+    
+    This command provides detailed explanations of code in natural language,
+    focusing on key concepts and patterns.
+    """
+    try:
+        analyzer = load_analyzer_state()
+        
+        # Read the relevant code section
+        with open(file_path, 'r') as f:
+            lines = f.readlines()
+            if start_line and end_line:
+                if 0 <= start_line - 1 <= end_line - 1 < len(lines):
+                    code = ''.join(lines[start_line - 1:end_line])
+                else:
+                    console.print("[red]Invalid line range[/]")
+                    return
+            else:
+                code = ''.join(lines)
+
+        async def get_explanation():
+            explanation = await analyzer.explain_code(code, detail_level=detail)
+            console.print("\n[bold green]Explanation:[/]")
+            console.print(explanation)
+
+        asyncio.run(get_explanation())
+        
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+        traceback.print_exc()
 
 if __name__ == '__main__':
     cli()

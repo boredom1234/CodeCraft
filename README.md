@@ -15,6 +15,9 @@ A powerful AI-powered tool for understanding, analyzing, and exploring codebases
 
 - 🔍 **Intelligent Code Analysis**: Deep semantic understanding of code structure and relationships
 - 💬 **Natural Language Queries**: Ask questions about your codebase in plain English
+- ✨ **Real-time Code Completion**: Get context-aware code suggestions as you type
+- 💡 **Inline Suggestions**: Multiple intelligent suggestions for improving your code
+- 📝 **Code Explanations**: Natural, conversational explanations of code blocks
 - 🎯 **Multi-Language Support**: Analyzes Python, JavaScript, TypeScript, Go, and more
 - 📊 **Project Management**: Handle multiple codebases through an organized project system
 - 🧠 **Context-Aware**: Maintains conversation history for coherent follow-up questions
@@ -75,6 +78,19 @@ python cli.py init https://github.com/user/repo --github --project my-project
 python cli.py refresh
 ```
 
+### Code Intelligence Features
+
+```bash
+# Get code completions
+python cli.py complete path/to/file.py --line 42
+
+# Get inline code suggestions
+python cli.py suggest path/to/file.py --line 42
+
+# Get natural language explanations
+python cli.py explain path/to/file.py --start-line 42 --end-line 50 --detail high
+```
+
 ### Ask Questions
 
 ```bash
@@ -130,6 +146,9 @@ debug: false
 | `create-project` | Create/switch to a project | `PROJECT_NAME` |
 | `init` | Initialize codebase | `--github`, `--project` |
 | `ask` | Query the codebase | `--interactive`, `--composer`, `--chunks`, `--reset`, `--project` |
+| `complete` | Get code completions | `--line` |
+| `suggest` | Get inline suggestions | `--line` |
+| `explain` | Get code explanations | `--start-line`, `--end-line`, `--detail` |
 | `list-projects` | Show all projects | - |
 | `switch-project` | Change active project | `PROJECT_NAME` |
 | `status` | Show project statistics | `--format [text\|json]` |
