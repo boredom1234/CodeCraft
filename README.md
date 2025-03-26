@@ -83,7 +83,20 @@ python cli.py configure
 
 ## 🎮 Usage
 
-### Set Up Project Path
+### Project Management
+
+```bash
+# Create a new project
+python cli.py create-project myapp
+
+# List available projects
+python cli.py list-projects
+
+# Switch to a different project
+python cli.py switch-project myapp
+```
+
+### Code Review
 
 ```bash
 # Set default project path
@@ -97,6 +110,38 @@ python cli.py assist /path/to/review
 
 # Watch mode for continuous review
 python cli.py assist --watch
+```
+
+### Code Analysis
+
+```bash
+# Initialize codebase
+python cli.py init /path/to/code --github
+
+# Refresh codebase index
+python cli.py refresh --summary
+
+# Get code completions
+python cli.py complete file.py --line 42
+
+# Get inline suggestions
+python cli.py suggest file.py --line 42
+
+# Explain code sections
+python cli.py explain file.py --start-line 10 --end-line 20
+```
+
+### Interactive Features
+
+```bash
+# Ask questions about code
+python cli.py ask -i "How does X work?"
+
+# Reset conversation history
+python cli.py reset-history
+
+# Show project status
+python cli.py status --format json
 ```
 
 ### Review Output Format
@@ -118,12 +163,20 @@ Issues are categorized into:
 | Command | Description | Options |
 |---------|-------------|---------|
 | `assist` | Start code review | `--watch`, `--set-project-path` |
+| `ask` | Query the codebase | `--interactive`, `--composer`, `--chunks`, `--reset`, `--project` |
 | `configure` | Set up API keys | - |
 | `create-project` | Create/switch project | `PROJECT_NAME` |
-| `init` | Initialize codebase | `--github`, `--project` |
+| `init` | Initialize codebase | `--github`, `--project`, `--summary`, `--workers`, `--distributed` |
 | `list-projects` | Show all projects | - |
 | `switch-project` | Change active project | `PROJECT_NAME` |
 | `status` | Show project statistics | `--format [text\|json]` |
+| `refresh` | Update codebase index | `--summary` |
+| `complete` | Get code completions | `--line`, `--scope`, `--patterns` |
+| `suggest` | Get inline suggestions | `--line`, `--scope`, `--threshold` |
+| `explain` | Explain code sections | `--start-line`, `--end-line`, `--detail` |
+| `reset-history` | Clear conversation | - |
+| `debug-projects` | Debug project registry | - |
+| `compose` | Manage components | `add`, `remove`, `list` |
 
 ## 🛠️ Configuration
 
@@ -152,4 +205,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Together AI](https://www.together.ai/) for their powerful LLM API
 - [FAISS](https://github.com/facebookresearch/faiss) for vector similarity search
 - [Rich](https://github.com/Textualize/rich) for beautiful terminal interfaces
-- [Click](https://click.palletsprojects.com/) for CLI framework 
+- [Click](https://click.palletsprojects.com/) for CLI framework

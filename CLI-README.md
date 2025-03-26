@@ -187,11 +187,55 @@ Issues are categorized into:
 | Command | Description | Example |
 |---------|-------------|---------|
 | `assist` | Start code review | `python cli.py assist --watch` |
+| `ask` | Query the codebase | `python cli.py ask -i "How does X work?"` |
 | `configure` | Set up API key | `python cli.py configure` |
 | `create-project` | Create project | `python cli.py create-project myapp` |
+| `init` | Initialize codebase | `python cli.py init /path/to/code --github` |
 | `list-projects` | List all projects | `python cli.py list-projects` |
 | `switch-project` | Change project | `python cli.py switch-project myapp` |
-| `status` | Show statistics | `python cli.py status` |
+| `status` | Show statistics | `python cli.py status --format json` |
+| `refresh` | Update codebase index | `python cli.py refresh --summary` |
+| `complete` | Get code completions | `python cli.py complete file.py --line 42` |
+| `suggest` | Get inline suggestions | `python cli.py suggest file.py --line 42` |
+| `explain` | Explain code sections | `python cli.py explain file.py --start-line 10 --end-line 20` |
+| `reset-history` | Clear conversation | `python cli.py reset-history` |
+| `debug-projects` | Debug project registry | `python cli.py debug-projects` |
+| `compose` | Manage components | `python cli.py compose add testing` |
+
+### Command Options
+
+#### `assist`
+- `--watch, -w`: Enable continuous monitoring
+- `--set-project-path`: Set default project path
+
+#### `ask`
+- `--interactive, -i`: Start interactive mode
+- `--composer, -c`: Show changes as diffs
+- `--chunks`: Number of context chunks
+- `--reset, -r`: Reset conversation history
+- `--project, -p`: Specify project
+
+#### `init`
+- `--github`: Initialize from GitHub URL
+- `--project`: Specify project name
+- `--summary`: Generate detailed summary
+- `--workers`: Number of parallel workers
+- `--distributed`: Enable distributed processing
+
+#### `complete`
+- `--line, -l`: Line number for context
+- `--scope, -s`: Show scope information
+- `--patterns, -p`: Show similar patterns
+
+#### `suggest`
+- `--line, -l`: Line number for suggestions
+- `--scope, -s`: Show scope information
+- `--threshold, -t`: Minimum relevance score
+
+#### `explain`
+- `--start-line, -s`: Start line number
+- `--end-line, -e`: End line number
+- `--detail, -d`: Level of detail (low/medium/high)
 
 ## Examples
 
