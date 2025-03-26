@@ -1377,7 +1377,7 @@ class CodebaseAnalyzer:
                 enhanced_prompt,
                 temperature=self.config.get('temperature', 0.8),  # Slightly higher temperature
                 max_tokens=4000
-        )
+            )
         
         # Format the response for display
         self._format_output(response)
@@ -2183,73 +2183,326 @@ class CodebaseAnalyzer:
             raise
 
     async def complete_code(self, code_prefix: str, file_path: str = None, line_number: int = None) -> str:
-        """Provide real-time code completion suggestions."""
-        prompt_parts = [
-            "You are an expert programmer providing real-time code completion.",
-            "Complete the code in a way that follows the existing patterns and style.",
-            f"Current file: {file_path}" if file_path else "",
-            f"Line number: {line_number}" if line_number else "",
-            "\nCode prefix:",
-            code_prefix,
-            "\nProvide only the completion, no explanations."
-        ]
-
-        # Get file context if available
-        if file_path:
-            try:
-                with open(file_path, 'r') as f:
-                    file_content = f.read()
-                prompt_parts.extend([
-                    "\nFile context:",
-                    file_content
-                ])
-            except Exception:
-                pass
-
-        prompt = "\n".join(filter(None, prompt_parts))
-        
-        completion = await self.ai_client.get_completion(
-            prompt,
-            temperature=0.2,  # Lower temperature for more focused completions
-            max_tokens=500
-        )
-        
-        return completion.strip()
-
-    async def suggest_inline(self, file_path: str, line_number: int, line_content: str) -> List[str]:
-        """Provide inline code suggestions based on current line."""
-        prompt_parts = [
-            "You are an expert programmer providing inline code suggestions.",
-            "Suggest 3 possible ways to complete or improve the current line of code.",
-            "Consider the context and common programming patterns.",
-            f"File: {file_path}",
-            f"Line {line_number}: {line_content}",
-            "\nProvide exactly 3 suggestions, one per line, no explanations."
-        ]
-
-        # Get surrounding context
+        """Provide intelligent code completion suggestions using full codebase context."""
         try:
-            with open(file_path, 'r') as f:
-                lines = f.readlines()
-                start = max(0, line_number - 5)
-                end = min(len(lines), line_number + 5)
-                context = ''.join(lines[start:end])
-                prompt_parts.extend([
-                    "\nSurrounding context:",
-                    context
-                ])
-        except Exception:
-            pass
+            # Get file context and metadata
+            file_context = {}
+            if file_path:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        file_content = f.read()
+                except UnicodeDecodeError:
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        file_content = f.read()
+                        console.print("[yellow]Warning: Some characters in the file could not be decoded properly.[/]")
+                file_context = self._create_direct_file_context(file_path, file_content)
+                    
+                # Find relevant chunks from the codebase
+                file_query = f"Find code related to {file_path} and functions or classes used in it"
+                relevant_chunks = await self._get_relevant_chunks(file_query, chunk_count=5)
+                
+                # Extract imports and dependencies
+                structure = extract_code_structure(file_content, Path(file_path).suffix.lstrip('.'))
+                imports = structure.imports if structure else []
+                
+                # Get type information and function signatures
+                type_info = self._extract_type_information(file_content, imports)
+            
+            # Build enhanced prompt with full context
+            prompt_parts = [
+                "You are an expert programmer providing intelligent code completion.",
+                "Complete the code in a way that follows the project's patterns and best practices.",
+                f"Current file: {file_path}" if file_path else "",
+                f"Line number: {line_number}" if line_number else "",
+                "\nProject context:",
+                self._format_project_context(),
+                "\nRelevant code from other files:",
+                self._format_chunks(relevant_chunks) if file_path else "",
+                "\nImports and dependencies:",
+                "\n".join(imports) if file_path else "",
+                "\nType information:",
+                type_info if file_path else "",
+                "\nCode to complete:",
+                code_prefix,
+                "\nProvide a completion that:",
+                "1. Matches the project's coding style and patterns",
+                "2. Uses correct imports and type annotations",
+                "3. Follows best practices for error handling",
+                "4. Maintains consistency with existing code",
+                "\nReturn ONLY the completion code, no explanations."
+            ]
+            
+            prompt = "\n".join(filter(None, prompt_parts))
+            
+            completion = await self.ai_client.get_completion(
+                prompt,
+                temperature=0.2,
+                max_tokens=500
+            )
+            
+            return completion.strip()
+            
+        except Exception as e:
+            console.print(f"[bold red]Error in code completion: {str(e)}[/]")
+            return ""
 
-        prompt = "\n".join(filter(None, prompt_parts))
+    async def suggest_inline(self, file_path: str, line_number: int, line_content: str) -> List[Dict[str, any]]:
+        """Provide intelligent inline suggestions using full codebase context."""
+        try:
+            # Read the entire file
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_content = f.read()
+            except UnicodeDecodeError:
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                    file_content = f.read()
+                    console.print("[yellow]Warning: Some characters in the file could not be decoded properly.[/]")
+                
+            # Create file context
+            file_context = self._create_direct_file_context(file_path, file_content)
+            
+            # Find relevant code chunks
+            query = f"Find code patterns and examples similar to: {line_content}"
+            relevant_chunks = await self._get_relevant_chunks(query, chunk_count=5)
+            
+            # Extract code structure
+            structure = extract_code_structure(file_content, Path(file_path).suffix.lstrip('.'))
+            current_scope = self._get_current_scope(file_content, line_number)
+            
+            # Build enhanced prompt
+            prompt_parts = [
+                "You are an expert programmer providing intelligent code suggestions.",
+                "Provide 3 alternative ways to write or improve the current line.",
+                "Each suggestion should be complete, correct, and follow the project's patterns.",
+                f"File: {file_path}",
+                f"Line {line_number}: {line_content}",
+                "\nCurrent scope:",
+                current_scope,
+                "\nProject context:",
+                self._format_project_context(),
+                "\nSimilar patterns found:",
+                self._format_chunks(relevant_chunks),
+                "\nProvide exactly 3 suggestions that:",
+                "1. Match the project's coding style",
+                "2. Use appropriate error handling",
+                "3. Follow type safety and best practices",
+                "4. Consider the current scope and context",
+                "\nReturn ONLY the suggestions, one per line."
+            ]
+            
+            prompt = "\n".join(filter(None, prompt_parts))
+            
+            suggestions_text = await self.ai_client.get_completion(
+                prompt,
+                temperature=0.3,
+                max_tokens=200
+            )
+            
+            # Process and score suggestions
+            suggestions = []
+            for i, suggestion in enumerate(suggestions_text.strip().split('\n')[:3], 1):
+                if suggestion.strip():
+                    score = self._calculate_enhanced_suggestion_score(
+                        suggestion.strip(),
+                        line_content,
+                        file_content,
+                        relevant_chunks
+                    )
+                    
+                    suggestions.append({
+                        "text": suggestion.strip(),
+                        "score": score,
+                        "type": "inline_suggestion",
+                        "id": f"suggestion_{i}",
+                        "context": {
+                            "file": file_path,
+                            "line": line_number,
+                            "scope": current_scope
+                        }
+                    })
+            
+            # Sort by score and return
+            return sorted(suggestions, key=lambda x: x['score'], reverse=True)
+            
+        except Exception as e:
+            console.print(f"[bold red]Error generating suggestions: {str(e)}[/]")
+            return []
+
+    def _calculate_enhanced_suggestion_score(self, suggestion: str, current_line: str, file_content: str, relevant_chunks: List[SemanticChunk]) -> float:
+        """Calculate an enhanced relevance score for a suggestion using multiple factors."""
+        score = 0.0
         
-        suggestions = await self.ai_client.get_completion(
-            prompt,
-            temperature=0.3,
-            max_tokens=200
-        )
+        # Basic similarity (20%)
+        if current_line:
+            common_chars = sum(1 for c in suggestion if c in current_line)
+            score += 0.2 * (common_chars / max(len(suggestion), len(current_line)))
         
-        return [s.strip() for s in suggestions.strip().split('\n') if s.strip()]
+        # Code style consistency (30%)
+        style_score = 0.0
+        
+        # Indentation matching
+        if current_line:
+            curr_indent = len(current_line) - len(current_line.lstrip())
+            sugg_indent = len(suggestion) - len(suggestion.lstrip())
+            if curr_indent == sugg_indent:
+                style_score += 0.1
+        
+        # Project patterns matching
+        pattern_matches = 0
+        for chunk in relevant_chunks:
+            if any(line.strip() in chunk.content for line in suggestion.split('\n')):
+                pattern_matches += 1
+        style_score += 0.1 * min(1.0, pattern_matches / len(relevant_chunks))
+        
+        # Syntax completeness
+        if suggestion.count('(') == suggestion.count(')') and \
+           suggestion.count('{') == suggestion.count('}') and \
+           suggestion.count('[') == suggestion.count(']'):
+            style_score += 0.1
+        
+        score += 0.3 * style_score
+        
+        # Semantic relevance to codebase (50%)
+        semantic_score = 0.0
+        
+        # Check if suggestion uses variables/functions from current scope
+        file_tokens = set(re.findall(r'\b\w+\b', file_content))
+        suggestion_tokens = set(re.findall(r'\b\w+\b', suggestion))
+        common_tokens = suggestion_tokens.intersection(file_tokens)
+        
+        if suggestion_tokens:
+            semantic_score += 0.2 * (len(common_tokens) / len(suggestion_tokens))
+        
+        # Check relevance to similar patterns
+        chunk_relevance = 0.0
+        for chunk in relevant_chunks:
+            chunk_tokens = set(re.findall(r'\b\w+\b', chunk.content))
+            common_with_chunk = suggestion_tokens.intersection(chunk_tokens)
+            if suggestion_tokens:
+                chunk_relevance = max(chunk_relevance, len(common_with_chunk) / len(suggestion_tokens))
+        
+        semantic_score += 0.3 * chunk_relevance
+        
+        score += 0.5 * semantic_score
+        
+        return min(1.0, score)
+
+    def _get_current_scope(self, file_content: str, line_number: int) -> str:
+        """Extract the current code scope at a given line number."""
+        lines = file_content.split('\n')
+        scope_lines = lines[:line_number]
+        
+        current_class = None
+        current_function = None
+        current_block = []
+        
+        for line in scope_lines:
+            # Track class definitions
+            class_match = re.match(r'\s*class\s+(\w+)', line)
+            if class_match:
+                current_class = class_match.group(1)
+                
+            # Track function definitions
+            func_match = re.match(r'\s*(?:async\s+)?def\s+(\w+)', line)
+            if func_match:
+                current_function = func_match.group(1)
+                
+            # Track current block
+            if line.strip().endswith(':'):
+                current_block.append(line.strip())
+            elif line.strip() and not line.startswith(' '):
+                current_block = []
+        
+        scope_parts = []
+        if current_class:
+            scope_parts.append(f"Class: {current_class}")
+        if current_function:
+            scope_parts.append(f"Function: {current_function}")
+        if current_block:
+            scope_parts.append(f"Block: {' > '.join(current_block)}")
+            
+        return "\n".join(scope_parts)
+
+    def _extract_type_information(self, content: str, imports: List[str]) -> str:
+        """Extract type information and function signatures from code."""
+        type_info = []
+        
+        # Extract type annotations
+        type_annotations = re.findall(r'(?m)^\s*(?:async\s+)?def\s+(\w+)\s*\((.*?)\)\s*->\s*([^:]+):', content)
+        for func, params, return_type in type_annotations:
+            type_info.append(f"Function: {func}")
+            type_info.append(f"Parameters: {params}")
+            type_info.append(f"Returns: {return_type}\n")
+        
+        # Extract class structure
+        class_matches = re.finditer(r'(?m)^\s*class\s+(\w+)(?:\((.*?)\))?\s*:', content)
+        for match in class_matches:
+            class_name = match.group(1)
+            base_classes = match.group(2) or ''
+            type_info.append(f"Class: {class_name}")
+            if base_classes:
+                type_info.append(f"Inherits: {base_classes}\n")
+        
+        # Extract variable type hints
+        var_types = re.findall(r'(?m)^\s*(\w+)\s*:\s*([^=\n]+)(?:\s*=|$)', content)
+        if var_types:
+            type_info.append("Variables:")
+            for var, type_hint in var_types:
+                type_info.append(f"  {var}: {type_hint}")
+        
+        return "\n".join(type_info)
+
+    def _format_project_context(self) -> str:
+        """Format relevant project-wide context information."""
+        context_parts = []
+        
+        # Add project structure overview
+        if hasattr(self, 'project_summary'):
+            context_parts.append("Project Overview:")
+            context_parts.append(self.project_summary)
+        
+        # Add common patterns found in codebase
+        if hasattr(self, 'common_patterns'):
+            context_parts.append("\nCommon Patterns:")
+            for pattern in self.common_patterns:
+                context_parts.append(f"- {pattern}")
+        
+        # Add dependency information
+        if hasattr(self, 'project_dependencies'):
+            context_parts.append("\nKey Dependencies:")
+            for dep in self.project_dependencies:
+                context_parts.append(f"- {dep}")
+        
+        return "\n".join(context_parts)
+
+    async def _get_relevant_chunks(self, query: str, chunk_count: int) -> List[SemanticChunk]:
+        """Retrieve relevant chunks from the codebase based on a query."""
+        try:
+            # Get question embedding
+            question_embedding = await self.ai_client.get_embeddings([query])
+            question_vector = np.array(question_embedding).astype('float32')
+
+            # Search for relevant chunks
+            D, I = self.faiss_index.search(question_vector, chunk_count)
+            
+            # Retrieve relevant chunks and ensure they are SemanticChunk objects
+            relevant_chunks = []
+            for idx in I[0]:
+                if idx < len(self.documents):
+                    chunk = self.documents[idx]
+                    # If it's already a SemanticChunk, use it as is
+                    if isinstance(chunk, SemanticChunk):
+                        relevant_chunks.append(chunk)
+                    # If it's a raw string, create a SemanticChunk with metadata
+                    else:
+                        metadata = self.metadata[idx] if idx < len(self.metadata) else {}
+                        relevant_chunks.append(SemanticChunk(chunk, metadata))
+            
+            return relevant_chunks
+        
+        except Exception as e:
+            console.print(f"[bold red]Error retrieving relevant chunks: {str(e)}[/]")
+            return []
 
     async def explain_code(self, code: str, context: str = None, detail_level: str = "medium") -> str:
         """Explain code in a natural, conversational way."""
@@ -2450,3 +2703,159 @@ class CodebaseAnalyzer:
         score += 0.4 * style_score
         
         return min(1.0, score)
+
+    def _format_chunks(self, chunks: List[SemanticChunk]) -> str:
+        """Format a list of chunks into a readable string."""
+        if not chunks:
+            return ""
+            
+        formatted = []
+        for chunk in chunks:
+            if not isinstance(chunk, SemanticChunk):
+                continue
+                
+            metadata = chunk.metadata
+            formatted.append(f"\nFrom {metadata.get('file')} (lines {metadata.get('start_line')}-{metadata.get('end_line')}):")
+            formatted.append("```python")
+            formatted.append(chunk.content.strip())
+            formatted.append("```\n")
+            
+        return "\n".join(formatted)
+
+    def _analyze_code_issues(self, content: str, file_path: str) -> List[Dict]:
+        """Analyze code for potential issues and bugs.
+        
+        Args:
+            content: The code content to analyze
+            file_path: Path to the file being analyzed
+            
+        Returns:
+            List of issues found, each with location, type, and description
+        """
+        issues = []
+        
+        try:
+            # Parse the code
+            tree = ast.parse(content)
+            
+            # Track variable assignments and usage
+            assignments = {}
+            undefined_vars = set()
+            
+            # Track function definitions and calls
+            defined_functions = set()
+            called_functions = set()
+            
+            # Track exception handling
+            bare_excepts = []
+            
+            # Visit the AST
+            class IssueVisitor(ast.NodeVisitor):
+                def __init__(self):
+                    self.current_function_params = set()  # Track current function's parameters
+                    self.scope_assignments = [{}]  # Stack of variable assignments for each scope
+                
+                def visit_FunctionDef(self, node):
+                    # Add function parameters to current scope
+                    self.current_function_params = {arg.arg for arg in node.args.args}
+                    defined_functions.add(node.name)
+                    # Create new scope for function body
+                    self.scope_assignments.append({})
+                    self.generic_visit(node)
+                    # Remove function scope
+                    self.scope_assignments.pop()
+                    self.current_function_params = set()
+                
+                def visit_Name(self, node):
+                    if isinstance(node.ctx, ast.Store):
+                        # Variable assignment - add to current scope
+                        self.scope_assignments[-1][node.id] = node.lineno
+                    elif isinstance(node.ctx, ast.Load):
+                        # Variable usage - check if defined
+                        if (node.id not in self.current_function_params and  # Not a function parameter
+                            node.id not in __builtins__ and  # Not a builtin
+                            not any(node.id in scope for scope in self.scope_assignments) and  # Not in any scope
+                            node.id not in defined_functions):  # Not a defined function
+                            undefined_vars.add((node.id, node.lineno))
+                    self.generic_visit(node)
+                
+                def visit_Call(self, node):
+                    if isinstance(node.func, ast.Name):
+                        called_functions.add((node.func.id, node.lineno))
+                    self.generic_visit(node)
+                
+                def visit_Try(self, node):
+                    for handler in node.handlers:
+                        if handler.type is None:  # bare except
+                            bare_excepts.append(handler.lineno)
+                    self.generic_visit(node)
+            
+            visitor = IssueVisitor()
+            visitor.visit(tree)
+            
+            # Report undefined variables
+            for var, line in undefined_vars:
+                issues.append({
+                    'file': file_path,
+                    'line': line,
+                    'type': 'Error',
+                    'description': f'Undefined variable "{var}" used'
+                })
+            
+            # Report undefined functions
+            for func, line in called_functions:
+                if func not in defined_functions and func not in __builtins__:
+                    issues.append({
+                        'file': file_path,
+                        'line': line,
+                        'type': 'Error',
+                        'description': f'Call to undefined function "{func}"'
+                    })
+            
+            # Report bare except clauses
+            for line in bare_excepts:
+                issues.append({
+                    'file': file_path,
+                    'line': line,
+                    'type': 'Warning',
+                    'description': 'Bare except clause used - should catch specific exceptions'
+                })
+            
+            # Check for common logic issues
+            lines = content.splitlines()
+            for i, line in enumerate(lines, 1):
+                # Check for hardcoded credentials
+                if re.search(r'password\s*=\s*[\'"][^\'"]+[\'"]', line, re.I):
+                    issues.append({
+                        'file': file_path,
+                        'line': i,
+                        'type': 'Warning',
+                        'description': 'Hardcoded password found'
+                    })
+                
+                # Check for potential infinite loops
+                if re.search(r'while\s+True:', line):
+                    if not any('break' in l for l in lines[i:i+10]):  # Check next 10 lines
+                        issues.append({
+                            'file': file_path,
+                            'line': i,
+                            'type': 'Warning',
+                            'description': 'Potential infinite loop - no break statement found'
+                        })
+            
+            return issues
+            
+        except SyntaxError as e:
+            return [{
+                'file': file_path,
+                'line': e.lineno,
+                'type': 'Error',
+                'description': f'Syntax error: {str(e)}'
+            }]
+        except Exception as e:
+            return [{
+                'file': file_path,
+                'line': 1,
+                'type': 'Error',
+                'description': f'Error analyzing file: {str(e)}'
+            }]

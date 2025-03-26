@@ -10,8 +10,9 @@ from rich.console import Console
 from rich.prompt import Prompt, Confirm
 import yaml
 from dotenv import load_dotenv
-from analyzer import CodebaseAnalyzer
+from analyzer import CodebaseAnalyzer, extract_code_structure
 import time
+from typing import Optional
 
 console = Console()
 
@@ -868,11 +869,23 @@ def refresh(project: str = None, summary: bool = False):
 @cli.command()
 @click.argument('file_path', type=click.Path(exists=True))
 @click.option('--line', '-l', type=int, help='Line number for context')
-def complete(file_path: str, line: int = None):
-    """Get AI-powered code completions.
+@click.option('--scope', '-s', is_flag=True, help='Show current scope information')
+@click.option('--patterns', '-p', is_flag=True, help='Show similar code patterns')
+def complete(file_path: str, line: int = None, scope: bool = False, patterns: bool = False):
+    """Get AI-powered code completions with full codebase context.
     
-    This command provides intelligent code completions based on the current file
-    and optional line number context.
+    This command provides intelligent code completions based on:
+    - The entire codebase context
+    - Project patterns and coding style
+    - Type information and imports
+    - Current scope and dependencies
+    
+    Examples:
+        # Get completion at specific line
+        python cli.py complete path/to/file.py --line 42
+        
+        # Show scope and similar patterns
+        python cli.py complete path/to/file.py --line 42 --scope --patterns
     """
     try:
         analyzer = load_analyzer_state()
@@ -880,12 +893,42 @@ def complete(file_path: str, line: int = None):
         # Get the current line content if line number is provided
         current_line = ""
         if line:
-            with open(file_path, 'r') as f:
-                lines = f.readlines()
-                if 0 <= line - 1 < len(lines):
-                    current_line = lines[line - 1].strip()
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                    if 0 <= line - 1 < len(lines):
+                        current_line = lines[line - 1].strip()
+            except UnicodeDecodeError:
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                    lines = f.readlines()
+                    if 0 <= line - 1 < len(lines):
+                        current_line = lines[line - 1].strip()
+                    console.print("[yellow]Warning: Some characters in the file could not be decoded properly.[/]")
 
         async def get_completion():
+            # Show scope information if requested
+            if scope:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        file_content = f.read()
+                except UnicodeDecodeError:
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        file_content = f.read()
+                        console.print("[yellow]Warning: Some characters in the file could not be decoded properly.[/]")
+                current_scope = analyzer._get_current_scope(file_content, line or 1)
+                console.print("\n[bold blue]Current Scope:[/]")
+                console.print(current_scope)
+            
+            # Show similar patterns if requested
+            if patterns:
+                query = f"Find code patterns similar to: {current_line}"
+                relevant_chunks = await analyzer._get_relevant_chunks(query, 3)
+                console.print("\n[bold blue]Similar Patterns:[/]")
+                for chunk in relevant_chunks:
+                    console.print(f"\n[dim]{chunk.metadata.get('file')}:[/]")
+                    console.print(chunk.content.strip())
+            
+            # Get completion
             completion = await analyzer.complete_code(current_line, file_path, line)
             console.print("\n[bold green]Suggested completion:[/]")
             console.print(completion)
@@ -899,11 +942,29 @@ def complete(file_path: str, line: int = None):
 @cli.command()
 @click.argument('file_path', type=click.Path(exists=True))
 @click.option('--line', '-l', type=int, required=True, help='Line number to get suggestions for')
-def suggest(file_path: str, line: int):
-    """Get inline code suggestions.
+@click.option('--scope', '-s', is_flag=True, help='Show current scope information')
+@click.option('--threshold', '-t', type=float, default=0.5, help='Minimum relevance score (0-1)')
+def suggest(file_path: str, line: int, scope: bool = False, threshold: float = 0.5):
+    """Get intelligent inline code suggestions with codebase awareness.
     
-    This command provides intelligent suggestions for the current line
-    of code, offering multiple ways to complete or improve it.
+    This command provides multiple intelligent suggestions for improving
+    or completing your code, considering:
+    - Project-wide patterns and conventions
+    - Current scope and context
+    - Type safety and best practices
+    - Similar code patterns from the codebase
+    
+    Each suggestion includes a relevance score based on:
+    - Similarity to current code (20%)
+    - Code style consistency (30%)
+    - Semantic relevance to codebase (50%)
+    
+    Examples:
+        # Get suggestions with default threshold
+        python cli.py suggest path/to/file.py --line 42
+        
+        # Show scope and require high relevance
+        python cli.py suggest path/to/file.py --line 42 --scope --threshold 0.8
     """
     try:
         analyzer = load_analyzer_state()
@@ -918,157 +979,25 @@ def suggest(file_path: str, line: int):
                 return
 
         async def get_suggestions():
+            # Show scope information if requested
+            if scope:
+                with open(file_path, 'r') as f:
+                    file_content = f.read()
+                current_scope = analyzer._get_current_scope(file_content, line)
+                console.print("\n[bold blue]Current Scope:[/]")
+                console.print(current_scope)
+            
+            # Get and filter suggestions
             suggestions = await analyzer.suggest_inline(file_path, line, current_line)
-            console.print("\n[bold green]Suggestions:[/]")
-            for i, suggestion in enumerate(suggestions, 1):
-                console.print(f"\n{i}. {suggestion}")
-
-        asyncio.run(get_suggestions())
-        
-    except Exception as e:
-        console.print(f"[bold red]Error: {str(e)}[/]")
-        traceback.print_exc()
-
-@cli.command()
-@click.argument('file_path', type=click.Path(exists=True))
-@click.option('--line', '-l', type=int, required=True, help='Line number')
-@click.option('--watch', '-w', is_flag=True, help='Watch mode - continuously provide suggestions')
-def complete_realtime(file_path: str, line: int, watch: bool = False):
-    """Get real-time code completions as you type.
-    
-    This command provides intelligent code completions in real-time,
-    taking into account your current cursor position and file context.
-    
-    Examples:
-        # Get completion at specific position
-        python cli.py complete-realtime path/to/file.py --line 42
-        
-        # Watch mode (continuous suggestions)
-        python cli.py complete-realtime path/to/file.py --line 42 --watch
-    """
-    try:
-        analyzer = load_analyzer_state()
-        last_content = None
-        last_line_content = None
-        
-        async def get_realtime_completion():
-            nonlocal last_content, last_line_content
-            
-            # Read current file content
-            with open(file_path, 'r') as f:
-                current_content = f.read()
-                
-            # Get the current line
-            lines = current_content.split('\n')
-            current_line = lines[line - 1] if 0 <= line - 1 < len(lines) else ""
-            
-            # Check if content has changed
-            if current_line == last_line_content:
-                return
-                
-            last_content = current_content
-            last_line_content = current_line
-            
-            cursor_position = {'line': line, 'column': 0}
-            completion = await analyzer.complete_realtime(file_path, cursor_position, current_content)
-            
-            if 'error' in completion:
-                console.print(f"[red]Error: {completion['error']}[/]")
-                return
-            
-            # Clear previous output (only in watch mode)
-            if watch:
-                console.clear()
-                console.print("[bold blue]Watching for changes... (Ctrl+C to stop)[/]\n")
-            
-            console.print("[bold blue]Current line:[/]")
-            console.print(f"[dim]{current_line}[/]")
-            
-            console.print("\n[bold green]Real-time completion:[/]")
-            console.print(completion['completion'])
-        
-        if watch:
-            try:
-                console.print("[bold blue]Watching for changes... (Ctrl+C to stop)[/]")
-                while True:
-                    asyncio.run(get_realtime_completion())
-                    time.sleep(0.5)  # Check every half second
-            except KeyboardInterrupt:
-                console.print("\n[yellow]Stopped watching[/]")
-        else:
-            asyncio.run(get_realtime_completion())
-            
-    except Exception as e:
-        console.print(f"[bold red]Error: {str(e)}[/]")
-        traceback.print_exc()
-
-@cli.command()
-@click.argument('file_path', type=click.Path(exists=True))
-@click.option('--line', '-l', type=int, required=True, help='Line number')
-@click.option('--watch', '-w', is_flag=True, help='Watch mode - continuously provide suggestions')
-@click.option('--threshold', '-t', type=float, default=0.5, help='Minimum relevance score threshold (0-1)')
-def suggest_realtime(file_path: str, line: int, watch: bool = False, threshold: float = 0.5):
-    """Get real-time inline code suggestions.
-    
-    This command provides multiple intelligent suggestions for improving
-    or completing your code in real-time. Each suggestion comes with
-    a relevance score indicating how well it matches the context.
-    
-    Examples:
-        # Get suggestions for a specific line
-        python cli.py suggest-realtime path/to/file.py --line 42
-        
-        # Watch mode with custom relevance threshold
-        python cli.py suggest-realtime path/to/file.py --line 42 --watch --threshold 0.7
-    """
-    try:
-        analyzer = load_analyzer_state()
-        last_content = None
-        last_line_content = None
-        
-        async def get_realtime_suggestions():
-            nonlocal last_content, last_line_content
-            
-            # Read current file content
-            with open(file_path, 'r') as f:
-                current_content = f.read()
-                
-            # Get the current line for display
-            lines = current_content.split('\n')
-            current_line = lines[line - 1] if 0 <= line - 1 < len(lines) else ""
-            
-            # Check if content has changed
-            if current_line == last_line_content:
-                return
-            
-            last_content = current_content
-            last_line_content = current_line
-            
-            cursor_position = {'line': line, 'column': 0}
-            suggestions = await analyzer.suggest_inline_realtime(file_path, cursor_position, current_content)
-            
-            if not suggestions:
-                console.print("[yellow]No suggestions available[/]")
-                return
-            
-            # Filter suggestions by threshold
             suggestions = [s for s in suggestions if s['score'] >= threshold]
             
             if not suggestions:
                 console.print(f"[yellow]No suggestions met the minimum relevance threshold of {threshold}[/]")
                 return
             
-            # Clear previous output (only in watch mode)
-            if watch:
-                console.clear()
-                console.print("[bold blue]Watching for changes... (Ctrl+C to stop)[/]\n")
-            
-            console.print("[bold blue]Current line:[/]")
-            console.print(f"[dim]{current_line}[/]")
-            
-            console.print("\n[bold green]Real-time suggestions:[/]")
+            console.print("\n[bold green]Suggestions:[/]")
             for i, suggestion in enumerate(suggestions, 1):
-                # Calculate color based on score
+                # Color based on score
                 score = suggestion['score']
                 if score >= 0.8:
                     color = "green"
@@ -1077,21 +1006,18 @@ def suggest_realtime(file_path: str, line: int, watch: bool = False, threshold: 
                 else:
                     color = "yellow"
                 
-                # Format the suggestion with score
+                # Show suggestion with context
                 console.print(f"\n{i}. [{color}]{suggestion['text']}[/]")
                 console.print(f"   [dim]Relevance: {score:.2%}[/]")
+                
+                # Show context if available
+                if 'context' in suggestion:
+                    ctx = suggestion['context']
+                    if ctx.get('scope'):
+                        console.print(f"   [dim]Scope: {ctx['scope']}[/]")
+
+        asyncio.run(get_suggestions())
         
-        if watch:
-            try:
-                console.print("[bold blue]Watching for changes... (Ctrl+C to stop)[/]")
-                while True:
-                    asyncio.run(get_realtime_suggestions())
-                    time.sleep(0.5)  # Check every half second
-            except KeyboardInterrupt:
-                console.print("\n[yellow]Stopped watching[/]")
-        else:
-            asyncio.run(get_realtime_suggestions())
-            
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
         traceback.print_exc()
@@ -1132,6 +1058,162 @@ def explain(file_path: str, start_line: int = None, end_line: int = None, detail
     except Exception as e:
         console.print(f"[bold red]Error: {str(e)}[/]")
         traceback.print_exc()
+
+@cli.command()
+@click.argument('path', type=click.Path(exists=True), required=False)
+@click.option('--watch', '-w', is_flag=True, help='Watch mode - continuously review code changes')
+@click.option('--set-project-path', type=click.Path(exists=True), help='Set and save the project path for future use')
+def assist(path: str = None, watch: bool = False, set_project_path: str = None):
+    """Live code review assistant.
+    
+    Watches your codebase for changes and provides immediate feedback on:
+    - Implementation errors
+    - Logic flaws
+    - Best practice violations
+    - Potential bugs
+    - Security issues
+    
+    Examples:
+        # Set project path for future use
+        python cli.py assist --set-project-path /path/to/your/project
+        
+        # Review using saved project path
+        python cli.py assist
+        
+        # Review specific directory
+        python cli.py assist /path/to/review
+        
+        # Watch mode for continuous review
+        python cli.py assist --watch
+    """
+    try:
+        analyzer = load_analyzer_state()
+        config_dir = Path.home() / ".codeai"
+        config_file = config_dir / "config.yml"
+        
+        # Load existing config
+        config = {}
+        if config_file.exists():
+            with open(config_file, 'r') as f:
+                config = yaml.safe_load(f) or {}
+        
+        # Handle setting project path
+        if set_project_path:
+            config['project_path'] = str(Path(set_project_path).resolve())
+            config_dir.mkdir(exist_ok=True)
+            with open(config_file, 'w') as f:
+                yaml.dump(config, f)
+            console.print(f"[green]✓ Project path set to: {config['project_path']}[/]")
+            if not path:  # If no path specified, use the newly set project path
+                path = config['project_path']
+        
+        # If no path specified, try to use saved project path
+        if not path:
+            path = config.get('project_path', '.')
+            if path == '.':
+                console.print("[yellow]No project path specified or saved. Using current directory.[/]")
+                console.print("[yellow]Tip: Use --set-project-path to save a default project path.[/]")
+        
+        async def review_code(file_path: str) -> None:
+            try:
+                # Read file content
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Get static analysis issues
+                issues = analyzer._analyze_code_issues(content, file_path)
+                
+                # Generate focused AI review
+                prompt = f"""Review this code concisely. Focus ONLY on:
+                1. Critical bugs or errors
+                2. Major performance issues
+                3. Security vulnerabilities
+                4. Significant design flaws
+
+                Format: "<file>:<line> - <type>: <brief description>"
+                Keep each issue to one line. Skip minor style issues.
+
+                Code to review:
+                {content}
+                """
+                
+                review = await analyzer.ai_client.get_completion(prompt)
+                
+                # Clear screen in watch mode
+                if watch:
+                    console.clear()
+                    console.print(f"[bold blue]Changes in {Path(file_path).name}:[/]\n")
+                
+                # Print critical static analysis issues
+                critical_issues = [i for i in issues if i["type"] in ("Error", "Warning")]
+                if critical_issues:
+                    for issue in critical_issues:
+                        color = "red" if issue["type"] == "Error" else "yellow"
+                        console.print(f"[{color}]{issue['file']}:{issue['line']} - {issue['description']}[/]")
+                    console.print()
+                
+                # Print AI review
+                console.print(review.strip())
+                
+            except Exception as e:
+                console.print(f"[bold red]Error reviewing {file_path}: {str(e)}[/]")
+        
+        if watch:
+            try:
+                last_mtimes = {}
+                console.print(f"[bold blue]Watching directory: {path}[/]")
+                console.print("[dim]Press Ctrl+C to stop[/]\n")
+                
+                while True:
+                    # Get all Python files in the directory
+                    files = list(Path(path).rglob('*.py'))
+                    
+                    for file_path in files:
+                        try:
+                            mtime = os.path.getmtime(str(file_path))
+                            if str(file_path) not in last_mtimes or mtime != last_mtimes[str(file_path)]:
+                                last_mtimes[str(file_path)] = mtime
+                                asyncio.run(review_code(str(file_path)))
+                        except FileNotFoundError:
+                            continue
+                            
+                    time.sleep(1)  # Check every second
+                    
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Stopped watching[/]")
+        else:
+            # Single review of all Python files
+            files = list(Path(path).rglob('*.py'))
+            if not files:
+                console.print(f"[yellow]No Python files found in {path}[/]")
+                return
+                
+            console.print(f"[bold blue]Reviewing {len(files)} Python files in {path}...[/]\n")
+            for file_path in files:
+                console.print(f"[dim]Reviewing {file_path}...[/]")
+                asyncio.run(review_code(str(file_path)))
+            
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+        traceback.print_exc()
+
+def _detect_active_file() -> Optional[str]:
+    """Try to detect which file the user is currently working on."""
+    try:
+        # Try to find the most recently modified Python file in current directory
+        current_dir = Path('.')
+        python_files = list(current_dir.rglob('*.py'))
+        
+        if not python_files:
+            return None
+            
+        # Sort by modification time, most recent first
+        python_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        
+        return str(python_files[0])
+        
+    except Exception:
+        return None
 
 if __name__ == '__main__':
     cli()

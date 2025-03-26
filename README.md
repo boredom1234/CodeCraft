@@ -4,29 +4,50 @@
   <img src="logo.jpg" alt="AI Codebase Reviewer Logo" width="200">
 </div>
 
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-A powerful AI-powered tool for understanding, analyzing, and exploring codebases. This tool leverages vector embeddings and Large Language Models (via Together AI) to help developers navigate and understand code through natural language interactions.
+A powerful AI-powered code review assistant that provides real-time feedback on your codebase. This tool leverages Together AI to detect critical issues, performance problems, and security vulnerabilities in your code.
 
 ## 🌟 Key Features
 
-- 🔍 **Intelligent Code Analysis**: Deep semantic understanding of code structure and relationships
-- 💬 **Natural Language Queries**: Ask questions about your codebase in plain English
-- ✨ **Real-time Code Completion**: Get context-aware code suggestions as you type
-- 💡 **Inline Suggestions**: Multiple intelligent suggestions for improving your code
-- 📝 **Code Explanations**: Natural, conversational explanations of code blocks
-- 🎯 **Multi-Language Support**: Analyzes Python, JavaScript, TypeScript, Go, and more
-- 📊 **Project Management**: Handle multiple codebases through an organized project system
-- 🧠 **Context-Aware**: Maintains conversation history for coherent follow-up questions
-- 🔄 **GitHub Integration**: Directly analyze repositories from GitHub
-- 🎨 **Rich CLI Interface**: Beautiful, interactive command-line interface with progress tracking
-- 📈 **Similarity Scores**: Displays relevance percentages for files and code chunks in search results
-- 🔍 **Code Indexing**: Index local or GitHub repositories for AI-powered search
-- 🔄 **Incremental Indexing**: Refresh index by processing only changed files for faster updates
-- 💬 **Intelligent Querying**: Ask questions about your codebase in natural language
+### 🔍 Code Review & Analysis
+- **Live Code Review**: Real-time monitoring of code changes with immediate feedback
+- **Critical Issue Detection**: Identifies bugs, performance issues, and security vulnerabilities
+- **Static Analysis**: Built-in code analysis for common programming issues
+- **Error Detection**: Syntax errors, undefined variables, security vulnerabilities, and logic flaws
+- **Documentation Analysis**: Extract and analyze docstrings, comments, and code structure
+
+### 💻 Project Management
+- **Multi-Project Support**: Handle multiple codebases through an organized project system
+- **Project Path Management**: Set and save default project paths
+- **GitHub Integration**: Directly analyze repositories from GitHub
+- **Configuration Management**: YAML-based settings and environment variable support
+
+### 🚀 Processing & Performance
+- **Parallel Processing**: Multi-threaded code analysis for better performance
+- **Distributed Processing**: Support for distributed code analysis
+- **Batch Processing**: Efficient handling of large codebases
+- **Watch Mode**: Continuous monitoring of file changes
+
+### 📊 Code Analysis
+- **Structure Analysis**: Extract and analyze code structure (classes, functions, imports)
+- **Similarity Scoring**: Calculate relevance scores for code suggestions
+- **Multi-Language Support**: Reviews Python, JavaScript, TypeScript, Go, and more
+- **Code Pattern Detection**: Identify and analyze common code patterns
+
+### 🤖 AI Integration
+- **Together AI Integration**: Powered by state-of-the-art language models
+- **Smart Embeddings**: Generate and use embeddings for code analysis
+- **Intelligent Suggestions**: Context-aware code completion and suggestions
+- **Interactive Mode**: Ask questions and get explanations about your code
+
+### 🛠️ Developer Tools
+- **Rich CLI Interface**: Beautiful, interactive command-line interface with progress tracking
+- **Debugging Support**: Error tracing and detailed error reporting
+- **Progress Tracking**: Visual progress bars and status updates
+- **Comprehensive Logging**: Detailed logging and error reporting system
 
 ## 🚀 Quick Start
 
@@ -40,11 +61,11 @@ A powerful AI-powered tool for understanding, analyzing, and exploring codebases
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/boredom1234/CodeWhisperer.git
+git clone https://github.com/yourusername/CodeWhisperer.git
 cd CodeWhisperer
 ```
 
-2. Create and activate a virtual environment (recommended):
+2. Create and activate a virtual environment:
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
@@ -62,147 +83,65 @@ python cli.py configure
 
 ## 🎮 Usage
 
-### Initialize a Project
+### Set Up Project Path
 
 ```bash
-# Create a new project
-python cli.py create-project my-project
+# Set default project path
+python cli.py assist --set-project-path /path/to/your/project
 
-# Index a local codebase
-python cli.py init /path/to/codebase --project my-project
+# Review using saved project path
+python cli.py assist
 
-# Or index from GitHub
-python cli.py init https://github.com/user/repo --github --project my-project
+# Review specific directory
+python cli.py assist /path/to/review
 
-# After making changes to your code, refresh the index
-python cli.py refresh
+# Watch mode for continuous review
+python cli.py assist --watch
 ```
 
-### Code Intelligence Features
+### Review Output Format
 
-```bash
-# Get code completions
-python cli.py complete path/to/file.py --line 42
-
-# Get inline code suggestions
-python cli.py suggest path/to/file.py --line 42
-
-# Get natural language explanations
-python cli.py explain path/to/file.py --start-line 42 --end-line 50 --detail high
+The tool provides concise, focused feedback in the following format:
+```
+file.py:42 - Error: Description of the critical issue
+file.py:73 - Warning: Description of the potential problem
 ```
 
-### Ask Questions
+Issues are categorized into:
+- Critical bugs and errors
+- Major performance issues
+- Security vulnerabilities
+- Significant design flaws
 
-```bash
-# Interactive mode with conversation history
-python cli.py ask --interactive --project my-project
+## 📚 Command Reference
 
-# Single question mode
-python cli.py ask --project my-project
-
-# With code changes suggestions
-python cli.py ask --composer --project my-project
-
-# Now you can ask questions about your code
-python cli.py ask "How does the authentication system work?"
-```
-
-### Manage Projects
-
-```bash
-# List all projects
-python cli.py list-projects
-
-# Switch between projects
-python cli.py switch-project another-project
-
-# View project status
-python cli.py status
-```
+| Command | Description | Options |
+|---------|-------------|---------|
+| `assist` | Start code review | `--watch`, `--set-project-path` |
+| `configure` | Set up API keys | - |
+| `create-project` | Create/switch project | `PROJECT_NAME` |
+| `init` | Initialize codebase | `--github`, `--project` |
+| `list-projects` | Show all projects | - |
+| `switch-project` | Change active project | `PROJECT_NAME` |
+| `status` | Show project statistics | `--format [text\|json]` |
 
 ## 🛠️ Configuration
 
-The tool can be configured through:
+Configure through:
 
-1. Environment variables (`.env` file):
+1. Environment variables (`.env`):
 ```env
 TOGETHER_API_KEY=your_api_key_here
 ```
 
 2. Project configuration (`~/.codeai/config.yml`):
 ```yaml
-chunk_size: 20
-overlap: 5
-max_history: 5
-temperature: 0.7
-debug: false
+project_path: /path/to/your/project
 ```
-
-## 📚 Command Reference
-
-| Command | Description | Options |
-|---------|-------------|---------|
-| `configure` | Set up API keys and settings | - |
-| `create-project` | Create/switch to a project | `PROJECT_NAME` |
-| `init` | Initialize codebase | `--github`, `--project` |
-| `ask` | Query the codebase | `--interactive`, `--composer`, `--chunks`, `--reset`, `--project` |
-| `complete` | Get code completions | `--line` |
-| `suggest` | Get inline suggestions | `--line` |
-| `explain` | Get code explanations | `--start-line`, `--end-line`, `--detail` |
-| `list-projects` | Show all projects | - |
-| `switch-project` | Change active project | `PROJECT_NAME` |
-| `status` | Show project statistics | `--format [text\|json]` |
-| `reset-history` | Clear conversation history | - |
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on how to:
-- Submit bug reports and feature requests
-- Set up your development environment
-- Submit pull requests
-- Follow our coding standards
-
-## 🔍 How It Works
-
-The tool uses several advanced techniques:
-1. **Code Structure Analysis**: Parses and understands code structure using AST and regex
-2. **Vector Embeddings**: Creates semantic embeddings of code chunks for intelligent search
-3. **LLM Integration**: Uses Together AI's LLMs for natural language understanding
-4. **Context Management**: Maintains conversation history and code context for better responses
-5. **Relevance Scoring**: Calculates similarity scores for files and code chunks to show which parts of the codebase are most relevant to your queries
-
-### Similarity Scores
-
-When you ask a question, the analyzer displays relevance percentages for each file and code chunk in the results:
-
-```
-Searching for relevant code to answer: How does data processing work?
-Using 10 chunks for context
-Found 10 relevant code sections
-File: processor.py Relevance: 78.45%
-  Chunk lines 1-25 Relevance: 85.32%
-  Chunk lines 30-45 Relevance: 71.58%
-```
-
-This helps you understand why certain code is shown and helps prioritize the most relevant information. Files and chunks are automatically sorted by relevance.
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-1. **API Key Problems**:
-   - Ensure your Together AI API key is correctly configured
-   - Run `python cli.py configure` to reconfigure
-
-2. **Indexing Issues**:
-   - Check file permissions
-   - Ensure sufficient disk space
-   - Verify supported file types
-
-3. **Query Problems**:
-   - Be more specific in questions
-   - Use `--chunks` to adjust context size
-   - Try `reset-history` if conversation derails
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
 
 ## 📄 License
 

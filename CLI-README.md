@@ -1,18 +1,92 @@
 # AI Code Reviewer
 
-A powerful AI-powered command-line tool for understanding, analyzing, and exploring codebases. This tool uses vector embeddings and LLMs (via Together AI) to help developers navigate and understand code.
+A powerful AI-powered code review assistant that provides real-time feedback on your codebase. This tool uses Together AI to detect critical issues, performance problems, and security vulnerabilities in your code.
 
 ## Features
 
-- 🔍 **Code Indexing**: Index local or GitHub repositories for AI-powered search
-- 💬 **Intelligent Querying**: Ask questions about your codebase in natural language
-- ✨ **Code Completion**: Real-time, context-aware code suggestions
-- 💡 **Smart Suggestions**: Multiple intelligent suggestions for improving your code
-- 📝 **Code Explanations**: Natural, conversational explanations of code blocks
-- 📊 **Multiple Projects**: Manage different codebases through the project system
-- 🧠 **Contextual Memory**: Maintains conversation history for better follow-up questions
-- 🔄 **GitHub Integration**: Pull and analyze repositories directly from GitHub
-- 📈 **Similarity Scores**: Shows relevance percentages for files and code chunks to prioritize important information
+### Code Review & Analysis
+- 🔍 **Live Code Review**: Real-time monitoring and analysis of code changes
+- 🚨 **Critical Issue Detection**: Identifies bugs, performance bottlenecks, and security risks
+- 🔬 **Static Analysis**: Built-in analysis for common programming issues
+- ⚠️ **Error Detection**: Comprehensive detection of:
+  - Syntax errors
+  - Undefined variables
+  - Security vulnerabilities
+  - Logic flaws
+  - Potential infinite loops
+  - Bare except clauses
+  - Hardcoded credentials
+- 📚 **Documentation Analysis**: Extract and analyze:
+  - Function and class docstrings
+  - Code comments
+  - Code structure documentation
+
+### Project Management
+- 📂 **Multi-Project Support**: Organize and manage multiple codebases
+- 🎯 **Project Path Management**: 
+  - Set default project paths
+  - Save project configurations
+  - Switch between projects
+- 🔄 **GitHub Integration**: 
+  - Clone and analyze GitHub repositories
+  - Support for remote codebases
+- ⚙️ **Configuration Management**:
+  - YAML-based settings
+  - Environment variable support
+  - API key management
+
+### Processing & Performance
+- ⚡ **Parallel Processing**: 
+  - Multi-threaded code analysis
+  - Distributed processing support
+  - Batch processing capabilities
+- 👀 **Watch Mode**: 
+  - Continuous file monitoring
+  - Real-time feedback
+  - Automatic reanalysis on changes
+
+### Code Analysis
+- 🏗️ **Structure Analysis**: 
+  - Class and function extraction
+  - Import statement analysis
+  - Code pattern detection
+- 📊 **Similarity Scoring**: 
+  - Relevance scoring for suggestions
+  - Search result ranking
+  - Code chunk similarity analysis
+- 🌐 **Multi-Language Support**: 
+  - Python
+  - JavaScript/TypeScript
+  - Go
+  - Additional language support
+
+### AI Integration
+- 🤖 **Together AI**: 
+  - State-of-the-art language models
+  - Smart code analysis
+  - Contextual understanding
+- 🧠 **Smart Embeddings**: 
+  - Code embedding generation
+  - Semantic search
+  - Context-aware analysis
+- 💡 **Interactive Features**: 
+  - Natural language queries
+  - Code explanations
+  - Suggestion generation
+
+### Developer Tools
+- 🎨 **Rich CLI Interface**: 
+  - Progress bars
+  - Status updates
+  - Color-coded output
+- 🐛 **Debugging Support**: 
+  - Error tracing
+  - Debug mode
+  - Detailed error reporting
+- 📈 **Progress Tracking**: 
+  - Visual progress indicators
+  - Time remaining estimates
+  - Process status updates
 
 ## Installation
 
@@ -20,6 +94,7 @@ A powerful AI-powered command-line tool for understanding, analyzing, and explor
 
 - Python 3.8+
 - pip package manager
+- Together AI API key
 
 ### Setup
 
@@ -34,25 +109,19 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Before using the tool, you need to configure your Together AI API key. You can do this by running:
+Configure your Together AI API key by running:
 
 ```bash
 python cli.py configure
 ```
 
-This will prompt you for your Together AI API key, which will be stored securely in a `.env` file and in `~/.codeai/config.yml`.
-
-Alternatively, you can manually create a `.env` file with:
-
-```
-TOGETHER_API_KEY=your_api_key_here
-```
+This will prompt you for your API key, which will be stored in:
+- `.env` file
+- `~/.codeai/config.yml`
 
 ## Usage
 
 ### Project Management
-
-The tool uses a project system to manage different codebases.
 
 #### Create a new project
 
@@ -60,15 +129,11 @@ The tool uses a project system to manage different codebases.
 python cli.py create-project PROJECT_NAME
 ```
 
-This creates a new project and sets it as the active project.
-
 #### List available projects
 
 ```bash
 python cli.py list-projects
 ```
-
-Shows all projects with their status (active/inactive) and creation date.
 
 #### Switch to a different project
 
@@ -76,184 +141,97 @@ Shows all projects with their status (active/inactive) and creation date.
 python cli.py switch-project PROJECT_NAME
 ```
 
-Changes the active project to the specified one.
+### Code Review Features
 
-### Indexing a Codebase
-
-#### Index a local directory
+#### Set up project path
 
 ```bash
-python cli.py init PATH_TO_DIRECTORY [--project PROJECT_NAME]
+# Set default project path
+python cli.py assist --set-project-path /path/to/your/project
 ```
 
-This scans and indexes the specified directory, making it ready for querying.
-
-#### Index a GitHub repository
+#### Start code review
 
 ```bash
-python cli.py init GITHUB_REPO_URL --github [--project PROJECT_NAME]
+# Review using saved project path
+python cli.py assist
+
+# Review specific directory
+python cli.py assist /path/to/review
 ```
 
-This clones and indexes the specified GitHub repository.
-
-#### Refresh a codebase index
+#### Watch mode
 
 ```bash
-python cli.py refresh [--project PROJECT_NAME] [--summary]
+# Continuously monitor for changes
+python cli.py assist --watch
 ```
 
-This detects new, modified, and deleted files in the codebase and updates the index accordingly. It's much faster than re-indexing everything, especially for large codebases after small changes.
+### Understanding Review Output
 
-### Querying the Codebase
-
-#### Ask a single question
-
-```bash
-python cli.py ask [--project PROJECT_NAME]
-```
-
-You'll be prompted to enter your question about the codebase.
-
-#### Get Code Completions
-
-```bash
-# Get completion suggestions for a specific line
-python cli.py complete path/to/file.py --line 42
-```
-
-This provides context-aware code completions based on your codebase.
-
-#### Get Inline Suggestions
-
-```bash
-# Get multiple suggestions for improving a line of code
-python cli.py suggest path/to/file.py --line 42
-```
-
-This offers multiple ways to complete or improve your code.
-
-#### Get Code Explanations
-
-```bash
-# Get natural language explanations of code blocks
-python cli.py explain path/to/file.py --start-line 42 --end-line 50 --detail high
-```
-
-Options for --detail:
-- low: Quick overview
-- medium: Balanced explanation
-- high: In-depth analysis
-
-#### Interactive mode
-
-```bash
-python cli.py ask --interactive [--project PROJECT_NAME]
-```
-
-Start an interactive session where you can ask multiple questions with persistent conversation history.
-
-#### Control context size
-
-```bash
-python cli.py ask --chunks NUMBER_OF_CHUNKS
-```
-
-Control how many chunks of code are used for context (default is dynamic based on question).
-
-#### Reset conversation history
-
-```bash
-python cli.py reset-history
-```
-
-Clears the conversation history while keeping the codebase index.
-
-### Understanding Similarity Scores
-
-When you ask a question, the tool now displays relevance percentages for files and code chunks:
+The tool provides focused feedback in the following format:
 
 ```
-Searching for relevant code to answer: How does the authentication system work?
-Using 8 chunks for context
-Found 8 relevant code sections
-File: auth/login.py Relevance: 82.17%
-  Chunk lines 10-35 Relevance: 89.54%
-  Chunk lines 40-60 Relevance: 74.80%
-File: models/user.py Relevance: 65.32%
-  Chunk lines 15-30 Relevance: 68.75%
+file.py:42 - Error: Description of the critical issue
+file.py:73 - Warning: Description of the potential problem
 ```
 
-This helps you:
-1. Understand which files and code sections are most relevant to your question
-2. See how the tool prioritizes information (sorted by relevance)
-3. Focus on the highest-relevance code first
+Issues are categorized into:
+1. Critical bugs and errors
+2. Major performance issues
+3. Security vulnerabilities
+4. Significant design flaws
 
-The similarity scores are calculated based on both semantic relevance and code structure.
+## Command Reference
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `assist` | Start code review | `python cli.py assist --watch` |
+| `configure` | Set up API key | `python cli.py configure` |
+| `create-project` | Create project | `python cli.py create-project myapp` |
+| `list-projects` | List all projects | `python cli.py list-projects` |
+| `switch-project` | Change project | `python cli.py switch-project myapp` |
+| `status` | Show statistics | `python cli.py status` |
 
 ## Examples
 
-### Creating and setting up a project
+### Setting up a project with continuous review
 
 ```bash
 # Create a new project
 python cli.py create-project frontend-app
 
-# Index a GitHub repository
-python cli.py init https://github.com/user/frontend-app --github
+# Set the project path
+python cli.py assist --set-project-path /path/to/frontend
 
-# Ask questions about the codebase
-python cli.py ask --interactive
+# Start watching for changes
+python cli.py assist --watch
 ```
 
-### Switching between projects
+### Reviewing multiple projects
 
 ```bash
-# List available projects
-python cli.py list-projects
-
-# Switch to another project
+# Switch between projects
 python cli.py switch-project backend-api
 
-# Ask questions about the newly activated project
-python cli.py ask
+# Review current project
+python cli.py assist
 ```
-
-## Command Reference
-
-| Command | Description |
-|---------|-------------|
-| `configure` | Set up API keys and configuration |
-| `create-project PROJECT_NAME` | Create a new project or switch to existing one |
-| `init SOURCE [--github] [--project PROJECT_NAME]` | Initialize and index a codebase |
-| `complete FILE_PATH [--line LINE_NUMBER]` | Get context-aware code completions |
-| `suggest FILE_PATH --line LINE_NUMBER` | Get intelligent code suggestions |
-| `explain FILE_PATH [--start-line START] [--end-line END] [--detail LEVEL]` | Get natural code explanations |
-| `list-projects` | List all available projects |
-| `switch-project PROJECT_NAME` | Switch to an existing project |
-| `ask [--interactive] [--chunks NUM] [--reset] [--project PROJECT_NAME]` | Ask questions about the codebase |
-| `reset-history` | Reset conversation history while keeping the index |
 
 ## Troubleshooting
 
 ### API Key Issues
 
 If you encounter authentication errors:
-- Ensure your Together AI API key is correctly set
-- Try running `python cli.py configure` to re-enter your API key
+- Run `python cli.py configure` to re-enter your API key
+- Check your `.env` file and `~/.codeai/config.yml`
 
-### Indexing Issues
+### Review Issues
 
-If indexing fails:
-- Check if the repository or directory exists and is accessible
-- Ensure you have sufficient disk space
-- Check the file types in your codebase (the tool indexes common code file types)
-
-### Query Issues
-
-If you get poor query results:
-- Try to be more specific in your questions
-- Use the `--chunks` option to include more context
-- Reset the conversation history with `reset-history` if the conversation has gone off track
+If the review process isn't working:
+- Ensure the project path is correctly set
+- Check file permissions
+- Verify the files are in supported languages
 
 ## Contributing
 
