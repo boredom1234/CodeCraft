@@ -618,55 +618,14 @@ class CodebaseAnalyzer:
         )
 
     def _format_output(self, text: str, title: str = "Code Analysis Report"):
-        """Format text using Rich's markdown renderer with enhanced layout"""
+        """Format text using a simple, conversational style"""
         try:
-            # Import required components for rich formatting
-            from rich.markdown import Markdown
-            from rich.panel import Panel
-            from rich import box
-            from rich.table import Table
-            
-            # Create header
-            header = self._create_header(title)
-            
-            # Process the text to enhance code blocks
-            enhanced_text = self._enhance_code_blocks(text)
-            
-            # Create main content with professional styling
-            md = Markdown(enhanced_text)
-            main_panel = Panel(
-                md,
-                border_style="blue",
-                box=box.HEAVY,
-                padding=(1, 2),
-                title="Technical Analysis",
-                title_align="left"
-            )
-            
-            # Create footer with stats
-            stats_table = Table.grid(padding=1)
-            stats_table.add_column(style="bold blue", justify="right")
-            stats_table.add_column(style="white")
-            
-            stats_table.add_row("Project:", self.project_name)
-            stats_table.add_row("Indexed Files:", str(len(set(m['file'] for m in self.metadata))))
-            stats_table.add_row("Total Chunks:", str(len(self.documents)))
-            stats_table.add_row("History Items:", str(len(self.conversation_history)))
-            
-            footer = self._create_footer("AI Code Analysis Engine")
-            
-            # Update layout
-            self.layout["header"].update(header)
-            self.layout["main"].update(main_panel)
-            self.layout["footer"].update(footer)
-            
-            # Print the layout
-            self.console.print(self.layout)
-            
+            # Simply print the text without any fancy formatting
+            self.console.print(text)
         except Exception as e:
             self.console.print(f"[bold red]Error formatting output:[/] {str(e)}")
-            # Fallback to simple formatting
-            self.console.print(f"\n[bold blue]{title}[/]\n\n{text}\n")
+            # Fallback to simple printing
+            self.console.print(text)
 
     async def query(self, question: str, chunk_count: int = None) -> str:
         """Query the codebase with enhanced semantic understanding."""
@@ -926,30 +885,26 @@ class CodebaseAnalyzer:
         """Generate response for direct file queries with complete file content."""
         # Build a specialized prompt for file-specific questions
         prompt_parts = [
-            "You are an AI assistant specializing in code analysis. You are examining a specific file requested by the user.",
-            "IMPORTANT: You MUST provide a COMPREHENSIVE and DETAILED analysis of this file. Your response should be extensive and thorough.",
-            f"The user is asking about the file: {query_context.get('target_file')}",
-            "CRITICAL INSTRUCTION: Your answers must be highly detailed - if your answer is too short or lacks sufficient detail, you may not be fulfilling your role properly.",
-            "Your response MUST include:"
+            "You are a friendly and helpful AI assistant analyzing code. Explain things in a natural, conversational way.",
+            "You're looking at a specific file that the user asked about.",
+            f"The file is: {query_context.get('target_file')}",
+            "Please be thorough but explain things like you're having a casual conversation with a fellow developer.",
+            "In your response, try to:"
         ]
-        
+
         # Add specialized instructions based on file type
         file_extension = Path(query_context.get('target_file', '')).suffix.lower()
-        if file_extension == '.py':
-            prompt_parts.append("1. A comprehensive overview of this Python file's purpose and functionality")
-            prompt_parts.append("2. Detailed explanation of ALL functions, classes, and significant code blocks")
-            prompt_parts.append("3. In-depth analysis of the Python programming patterns and techniques used")
-            prompt_parts.append("4. Line-by-line explanation of the most important sections")
-        elif file_extension in ['.js', '.ts', '.jsx', '.tsx']:
-            prompt_parts.append("1. A comprehensive overview of this JavaScript/TypeScript file's purpose")
-            prompt_parts.append("2. Detailed explanation of ALL functions, components, and significant code blocks")
-            prompt_parts.append("3. In-depth analysis of the JavaScript/TypeScript programming patterns used")
-            prompt_parts.append("4. Line-by-line explanation of the most important sections")
-        else:
-            prompt_parts.append("1. A comprehensive overview of this file's purpose and functionality")
-            prompt_parts.append("2. Detailed explanation of ALL significant code sections and their purpose")
-            prompt_parts.append("3. In-depth analysis of the programming patterns and techniques used")
-            prompt_parts.append("4. Line-by-line explanation of the most important sections")
+        
+        # Add final instructions
+        prompt_parts.extend([
+            "\nWhen explaining this file:",
+            "1. Start with a friendly overview of what the file does",
+            "2. Point out the interesting parts of the code",
+            "3. Explain how things work in a clear, conversational way",
+            "4. Mention any important patterns or things to watch out for",
+            "5. Use examples if they help explain things better",
+            "6. Keep it thorough but natural - like you're explaining to a colleague"
+        ])
         
         # Add the question
         prompt_parts.extend([
@@ -1279,34 +1234,22 @@ class CodebaseAnalyzer:
         """Generate response with enhanced prompt engineering"""
         # Build enhanced prompt
         prompt_parts = [
-            "You are an AI assistant analyzing code. Your responses should be COMPREHENSIVE, DETAILED and THOROUGH.",
-            "IMPORTANT: You MUST provide detailed code explanations with examples. Your responses should be extensive and complete.",
-            "When discussing files, show their actual contents and explain the key components in depth.",
+            "You are a friendly and helpful AI assistant analyzing code. Your responses should be conversational and easy to understand.",
+            "IMPORTANT: Explain things in a natural, chat-like way while still being thorough and detailed.",
+            "When discussing code, explain it in a way that feels like a conversation between developers.",
             f"Question type: {query_context['type']}",
-            "CRITICAL INSTRUCTION: Your answers must be highly detailed - if your answer is too short or lacks sufficient detail, you may not be fulfilling your role properly."
+            "Remember to be thorough but avoid overly formal or academic language."
         ]
         
-        # Add focus areas if any
-        if query_context['focus']:
-            prompt_parts.append(f"Focus areas: {', '.join(f'{t}: {n}' for t, n in query_context['focus'])}")
-        
-        # Add code elements if present
-        code_elements = [f"- {k}: {', '.join(v)}" for k, v in query_context['code_elements'].items() if v]
-        if code_elements:
-            prompt_parts.append("Code elements mentioned:")
-            prompt_parts.extend(code_elements)
-        
-        # Add the question
+        # Add the question and context
         prompt_parts.extend([
             "\nQuestion:",
             question,
-            "\nNOTE: Even for simple questions, you must provide a detailed and thorough analysis. Simple questions deserve comprehensive answers.",
-            "\nYour response MUST include:",
-            "1. Relevant code snippets with comprehensive explanations",
-            "2. File locations and line numbers with detailed context",
-            "3. Detailed explanation of how the code works, its purposes and functionality",
-            "4. Analysis of any important dependencies or related components",
-            "5. Examples and illustrations where helpful"
+            "\nPlease explain in a natural, conversational way. Include:",
+            "1. Clear explanations of the relevant code",
+            "2. Examples where helpful",
+            "3. Important details about how things work",
+            "4. Any related components or dependencies worth mentioning"
         ])
         
         # Check if context is too large and needs to be truncated
@@ -2085,3 +2028,156 @@ class CodebaseAnalyzer:
         except Exception as e:
             console.print(f"[yellow]Warning: Could not generate complete codebase summary: {str(e)}[/]")
             self.codebase_summary = f"# Codebase Summary\n\nTotal files: {len(indexable_files)}"
+
+    async def refresh_index(self):
+        """Refresh the codebase index by only indexing new or modified files."""
+        try:
+            console.print("[blue]Starting incremental refresh of the codebase index...[/]")
+            
+            # Make sure we have an existing index to update
+            if not hasattr(self, 'faiss_index') or self.faiss_index is None:
+                console.print("[yellow]No existing index found. Running full indexing instead...[/]")
+                return await self.index()
+                
+            # Get existing file information from metadata
+            indexed_files = {}
+            for meta in self.metadata:
+                if 'file' in meta and 'last_modified' in meta:
+                    indexed_files[meta['file']] = meta['last_modified']
+            
+            console.print(f"[blue]Found {len(indexed_files)} previously indexed files[/]")
+            
+            # Find all indexable files in the current codebase
+            all_files = []
+            for root, _, files in os.walk(self.path):
+                for file in files:
+                    file_path = Path(root) / file
+                    if self._should_index_file(file_path):
+                        all_files.append(file_path)
+            
+            console.print(f"[blue]Found {len(all_files)} indexable files in the current codebase[/]")
+            
+            # Check which files are new or modified
+            new_or_modified_files = []
+            file_extensions = {}
+            
+            for file_path in all_files:
+                try:
+                    rel_path = str(file_path.relative_to(self.path))
+                    last_modified = file_path.stat().st_mtime
+                    ext = file_path.suffix.lower()
+                    
+                    # Track file extensions
+                    if ext:
+                        file_extensions[ext] = file_extensions.get(ext, 0) + 1
+                    
+                    # Check if file is new or modified
+                    if rel_path not in indexed_files or last_modified > indexed_files[rel_path]:
+                        new_or_modified_files.append(file_path)
+                        if rel_path in indexed_files:
+                            console.print(f"[yellow]Modified file: {rel_path}[/]")
+                        else:
+                            console.print(f"[green]New file: {rel_path}[/]")
+                except Exception as e:
+                    console.print(f"[yellow]Error processing file {file_path}: {str(e)}[/]")
+            
+            # Check for deleted files
+            current_files = {str(file_path.relative_to(self.path)) for file_path in all_files}
+            deleted_files = set(indexed_files.keys()) - current_files
+            
+            if deleted_files:
+                console.print(f"[red]Found {len(deleted_files)} deleted files that will be removed from the index[/]")
+                for deleted_file in deleted_files:
+                    console.print(f"[red]Deleted: {deleted_file}[/]")
+            
+            # If nothing has changed, no need to update
+            if not new_or_modified_files and not deleted_files:
+                console.print("[green]No changes detected in the codebase. Index is up to date.[/]")
+                return
+                
+            console.print(f"[blue]Processing {len(new_or_modified_files)} new or modified files[/]")
+            
+            with Progress() as progress:
+                # Process new/modified files and generate embeddings
+                if new_or_modified_files:
+                    file_embeddings, file_documents, file_metadata = await self.parallel_processor.process_files_parallel(
+                        files=new_or_modified_files,
+                        chunk_size=self.config.get('chunk_size', 20),
+                        embedding_client=self.ai_client,
+                        batch_size=self.config.get('parallel', {}).get('batch_size', 10),
+                        progress=progress
+                    )
+                    
+                    if not file_embeddings and new_or_modified_files:
+                        console.print("[yellow]Warning: No embeddings were generated for new/modified files.[/]")
+                    
+                    # Update the existing index with new embeddings
+                    if file_embeddings:
+                        console.print(f"[blue]Adding {len(file_embeddings)} new embeddings to the index[/]")
+                        
+                        # Add new embeddings to FAISS index
+                        embeddings_array = np.array(file_embeddings).astype('float32')
+                        self.faiss_index.add(embeddings_array)
+                        
+                        # Update documents and metadata
+                        self.documents.extend(file_documents)
+                        self.metadata.extend(file_metadata)
+                
+                # Handle deleted files if any
+                if deleted_files:
+                    console.print("[blue]Removing deleted files from the index...[/]")
+                    
+                    # Identify indices of chunks to keep
+                    keep_indices = []
+                    new_documents = []
+                    new_metadata = []
+                    
+                    for i, meta in enumerate(self.metadata):
+                        if 'file' in meta and meta['file'] not in deleted_files:
+                            keep_indices.append(i)
+                            new_metadata.append(meta)
+                            new_documents.append(self.documents[i])
+                    
+                    # Create a new FAISS index with only the kept embeddings
+                    dimension = self.faiss_index.d
+                    new_index = faiss.IndexFlatL2(dimension)
+                    
+                    # Extract embeddings to keep from the original index
+                    for i in keep_indices:
+                        # We need to get the embedding for this document
+                        # Since FAISS doesn't support direct extraction, we reconstruct by querying
+                        # This is expensive but necessary for removing entries
+                        if i < len(self.documents):
+                            # Use a dummy search to get the embedding vector
+                            D, I = self.faiss_index.search(np.array([self.faiss_index.reconstruct(i)]).astype('float32'), 1)
+                            new_index.add(np.array([self.faiss_index.reconstruct(i)]).astype('float32'))
+                    
+                    # Replace the old index and data
+                    self.faiss_index = new_index
+                    self.documents = new_documents
+                    self.metadata = new_metadata
+                    
+                    console.print(f"[green]Removed {len(deleted_files)} deleted files from index[/]")
+                
+                # Update the codebase summary
+                if self.config.get('generate_summary', False):
+                    task_summary = progress.add_task("[blue]Updating codebase summary...", total=1)
+                    console.print("[blue]Updating codebase summary...[/]")
+                    await self._generate_codebase_summary(all_files)
+                    progress.update(task_summary, advance=1)
+                else:
+                    # Just create a minimal summary
+                    self.codebase_summary = f"# Codebase Summary\n\nTotal files: {len(all_files)}\nFile types: {', '.join(f'{ext} ({count})' for ext, count in sorted(file_extensions.items(), key=lambda x: x[1], reverse=True))}"
+                
+                # Save state
+                task_save = progress.add_task("[blue]Saving updated index...", total=1)
+                console.print("[blue]Saving updated index...[/]")
+                self.save_state()
+                progress.update(task_save, advance=1)
+                
+                console.print(f"[bold green]Index refresh complete! Current index has {len(self.documents)} chunks from {len(current_files)} files.[/]")
+                
+        except Exception as e:
+            console.print(f"[bold red]Error refreshing index: {str(e)}[/]")
+            traceback.print_exc()
+            raise

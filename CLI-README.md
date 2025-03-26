@@ -93,6 +93,14 @@ python cli.py init GITHUB_REPO_URL --github [--project PROJECT_NAME]
 
 This clones and indexes the specified GitHub repository.
 
+#### Refresh a codebase index
+
+```bash
+python cli.py refresh [--project PROJECT_NAME] [--summary]
+```
+
+This detects new, modified, and deleted files in the codebase and updates the index accordingly. It's much faster than re-indexing everything, especially for large codebases after small changes.
+
 ### Querying the Codebase
 
 #### Ask a single question

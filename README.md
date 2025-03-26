@@ -21,6 +21,9 @@ A powerful AI-powered tool for understanding, analyzing, and exploring codebases
 - 🔄 **GitHub Integration**: Directly analyze repositories from GitHub
 - 🎨 **Rich CLI Interface**: Beautiful, interactive command-line interface with progress tracking
 - 📈 **Similarity Scores**: Displays relevance percentages for files and code chunks in search results
+- 🔍 **Code Indexing**: Index local or GitHub repositories for AI-powered search
+- 🔄 **Incremental Indexing**: Refresh index by processing only changed files for faster updates
+- 💬 **Intelligent Querying**: Ask questions about your codebase in natural language
 
 ## 🚀 Quick Start
 
@@ -67,6 +70,9 @@ python cli.py init /path/to/codebase --project my-project
 
 # Or index from GitHub
 python cli.py init https://github.com/user/repo --github --project my-project
+
+# After making changes to your code, refresh the index
+python cli.py refresh
 ```
 
 ### Ask Questions
@@ -80,6 +86,9 @@ python cli.py ask --project my-project
 
 # With code changes suggestions
 python cli.py ask --composer --project my-project
+
+# Now you can ask questions about your code
+python cli.py ask "How does the authentication system work?"
 ```
 
 ### Manage Projects

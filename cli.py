@@ -810,5 +810,59 @@ def configure_logging():
     else:
         console.print(f"[blue]  codeai compose remove {component} --confirm[/]")
 
+@cli.command()
+@click.option('--project', '-p', help='Project to refresh')
+@click.option('--summary', is_flag=True, help='Generate detailed codebase summary after refresh')
+def refresh(project: str = None, summary: bool = False):
+    """Refresh the codebase index by updating only changed files.
+    
+    This command refreshes the codebase index by detecting and processing
+    only files that have been added, modified, or deleted since the last
+    indexing operation. This is much faster than re-indexing the entire codebase.
+    
+    Examples:
+        codeai refresh
+        codeai refresh --project myproject --summary
+    """
+    try:
+        # Change to specified project if requested
+        if project:
+            create_project_cmd = get_command('create_project')
+            ctx = click.Context(create_project_cmd, info_name='create_project')
+            create_project_cmd.invoke(ctx, project_name=project)
+            
+        # Load the analyzer state
+        console.print("[bold blue]Loading code analyzer...[/]")
+        analyzer = load_analyzer_state(project)
+        
+        # Update config with summary option
+        if summary:
+            analyzer.config['generate_summary'] = True
+            console.print("[bold yellow]Detailed codebase summary generation enabled[/]")
+        
+        async def run_refresh():
+            try:
+                # Refresh the index
+                await analyzer.refresh_index()
+                
+                # Save analyzer state
+                console.print("[green]Saving analyzer state...[/]")
+                save_analyzer_state(analyzer)
+                console.print(f"[bold green]✓ Codebase index refreshed successfully in project '{analyzer.project_name}'![/]")
+                
+            except Exception as e:
+                console.print(f"[bold red]Error in async operation: {str(e)}[/]")
+                traceback.print_exc()
+                raise
+        
+        # Run the async function
+        console.print("[bold blue]Starting refresh operation...[/]")
+        asyncio.run(run_refresh())
+        
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+        traceback.print_exc()
+        exit(1)
+
 if __name__ == '__main__':
     cli()

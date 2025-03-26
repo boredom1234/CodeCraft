@@ -31,6 +31,9 @@ def process_file(file_path: str, chunk_size: int = 20) -> List[Dict]:
         chunks = []
         i = 0
         
+        # Get file last modified time
+        last_modified = Path(file_path).stat().st_mtime
+        
         while i < len(lines):
             # Skip empty lines
             if not lines[i].strip():
@@ -62,7 +65,8 @@ def process_file(file_path: str, chunk_size: int = 20) -> List[Dict]:
                 'end_line': chunk_end,
                 'type': chunk_type,
                 'has_docstring': bool(re.search(r'""".*?"""', chunk_content, re.DOTALL)),
-                'has_comments': bool(re.search(r'#.*$', chunk_content, re.MULTILINE))
+                'has_comments': bool(re.search(r'#.*$', chunk_content, re.MULTILINE)),
+                'last_modified': last_modified  # Add last modified timestamp
             }
             
             chunks.append({
