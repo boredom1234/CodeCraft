@@ -16,6 +16,7 @@ A powerful AI-powered code review assistant that provides real-time feedback on 
 - [Basic Workflow](#-basic-workflow)
 - [Command Reference](#-command-reference)
 - [Configuration](#-configuration)
+- [Advanced Features](#-advanced-features)
 - [Contributing](#-contributing)
 - [License](#-license)
 - [Acknowledgments](#-acknowledgments)
@@ -86,12 +87,17 @@ python cli.py assist --set-project-path /path/to/your/project
 
 ### 🚀 Processing & Performance
 - **Parallel Processing**: Multi-threaded code analysis for better performance
+- **Memory-Aware Processing**: Adaptive batch sizing based on system memory
+- **Disk Streaming**: Stream results to disk to avoid memory issues
 - **Watch Mode**: Continuous monitoring of file changes
 - **Batch Processing**: Efficient handling of large codebases
+- **Distributed Processing**: Support for distributed workers
 
 ### 🤖 AI Integration
 - **Together AI Integration**: Powered by state-of-the-art language models
 - **Smart Embeddings**: Generate and use embeddings for code analysis
+- **Response Formatting**: Format output with headers and footers for better readability
+- **Chunked Responses**: Split long responses into chunks to avoid console truncation
 - **Interactive Mode**: Ask questions and get explanations about your code
 - **Concise Mode**: Get brief, direct answers instead of detailed explanations
 - **Code-Aware Retrieval**: Advanced search that understands code structure and relationships
@@ -162,21 +168,22 @@ Issues are categorized into:
 
 | Command | Description | Options |
 |---------|-------------|---------|
-| `init` | **Initialize codebase (first step)** | `--github`, `--project`, `--summary` |
+| `init` | **Initialize codebase (first step)** | `--github`, `--project`, `--summary`, `--workers`, `--batch-size`, `--distributed`, `--worker-addresses` |
 | `create-project` | Create new project | `PROJECT_NAME` |
 | `configure` | Set up API keys | - |
 | `assist` | Start code review | `--watch`, `--set-project-path` |
-| `ask` | Query the codebase | `--interactive`, `--composer`, `--chunks`, `--concise` |
+| `ask` | Query the codebase | `--interactive`, `--composer`, `--chunks`, `--concise`, `--reset`, `--project`, `--model` |
 | `explain` | Explain code sections | `--start-line`, `--end-line`, `--detail` |
 | `suggest` | Get inline suggestions | `--line`, `--scope`, `--threshold` |
 | `complete` | Get code completions | `--line`, `--scope`, `--patterns` |
 | `list-projects` | Show all projects | - |
 | `switch-project` | Change active project | `PROJECT_NAME` |
 | `status` | Show project statistics | `--format [text\|json]` |
-| `refresh` | Update codebase index | `--summary` |
+| `refresh` | Update codebase index | `--project`, `--summary` |
 | `reset-history` | Clear conversation | - |
 | `debug-projects` | Debug project registry | - |
 | `compose` | Manage components | `add`, `remove`, `list` |
+| `set-model` | Set default model | `--list` |
 
 ## 🛠️ Configuration
 
@@ -202,19 +209,43 @@ model:
   concise_responses: true
   max_tokens: 150
   verbosity: low
+  default: meta-llama/Llama-3.3-70B-Instruct-Turbo
 ```
 
-## 🧪 Testing
+## 🧪 Advanced Features
 
-Test the different features with the provided scripts:
+### Memory-Aware Processing
+
+The tool dynamically adjusts batch sizes based on available system memory:
+
+```yaml
+# In config.yml
+parallel_processing:
+  memory_limit_percentage: 80.0
+  stream_to_disk: true
+  cache_dir: .cache
+```
+
+### Distributed Processing
+
+Enable distributed processing for larger codebases:
 
 ```bash
-# Test concise mode
-python test_concise.py --run
-
-# Test advanced code retrieval
-python test_retrieval.py --run
+python cli.py init /path/to/code --distributed --worker-addresses host1:5000,host2:5000
 ```
+
+### Semantic Code Understanding
+
+The tool uses advanced semantic understanding of code:
+
+- Code structure analysis via AST parsing
+- Semantic chunking based on function/class boundaries
+- Importance calculation for code chunks
+- Context-aware retrieval using both semantic and keyword search
+
+### Response Formatting
+
+For longer responses, the tool automatically splits the output into chunks to avoid console truncation and provides proper headers and footers.
 
 ## 🤝 Contributing
 

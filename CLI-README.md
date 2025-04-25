@@ -120,6 +120,14 @@ python cli.py suggest file.py --line 42
   - Continuous file monitoring
   - Real-time feedback
   - Automatic reanalysis on changes
+- 🧠 **Memory-Aware Processing**:
+  - Adaptive batch sizing based on system memory
+  - Automatic resource optimization
+  - Stream results to disk to avoid memory issues
+- 🌐 **Distributed Processing**:
+  - Support for remote worker nodes
+  - Scalable analysis for large codebases
+  - Worker management system
 
 ### AI Integration
 - 🤖 **Together AI**: 
@@ -134,6 +142,14 @@ python cli.py suggest file.py --line 42
   - Natural language queries
   - Code explanations
   - Suggestion generation
+- 📋 **Response Formatting**:
+  - Structured outputs with headers and footers
+  - Chunked responses for large outputs
+  - Rich markdown formatting
+- 🔄 **Model Selection**:
+  - Switch between LLM models
+  - Configure default models
+  - Model-specific parameters
 
 ### Developer Tools
 - 🎨 **Rich CLI Interface**: 
@@ -239,9 +255,10 @@ Here is a comprehensive list of all available commands:
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `refresh` | Refresh the codebase index | `python cli.py refresh --summary` |
+| `refresh` | Refresh the codebase index | `python cli.py refresh --project myproject` |
 | `reset-history` | Reset conversation history | `python cli.py reset-history` |
 | `compose` | Manage project components and dependencies | `python cli.py compose add testing` |
+| `set-model` | Set default LLM model | `python cli.py set-model --list` |
 
 ### Detailed Command Options
 
@@ -290,6 +307,8 @@ Options:
 - `--chunks <chunks>`: Number of code chunks to use for context
 - `--reset, -r`: Reset conversation history before starting
 - `--project, -p <project>`: Project to use
+- `--concise`: Force concise responses (1-2 sentences)
+- `--model, -m <model>`: Specific model to use for this session
 
 Examples:
 ```bash
@@ -301,6 +320,9 @@ python cli.py ask --composer
 
 # Set context size and reset history
 python cli.py ask --chunks 5 --reset
+
+# Use specific model for a session
+python cli.py ask -i --model meta-llama/Llama-3.3-70B-Instruct-Turbo
 ```
 
 #### `list-projects`
@@ -451,6 +473,22 @@ python cli.py compose add testing
 python cli.py compose remove logging
 ```
 
+#### `set-model`
+Set default LLM model.
+
+Options:
+- `--list`: List available models
+- `--model <model>`: Specific model to set as default
+
+Examples:
+```bash
+# List available models
+python cli.py set-model --list
+
+# Set a different default model
+python cli.py set-model meta-llama/Llama-3-70B-Instruct
+```
+
 ## Examples
 
 ### Complete Workflow Examples
@@ -545,7 +583,7 @@ If you encounter authentication errors:
 
 If you're having issues with projects:
 - Use `python cli.py debug-projects` to inspect the registry
-- Try recreating the project with `python cli.py create-project <name>`
+- Try recreating the project with `python cli.py create-project <n>`
 
 ### Indexing Issues
 
@@ -553,6 +591,7 @@ If initialization is failing:
 - Check file permissions
 - Ensure your codebase is accessible
 - Try running with fewer workers: `python cli.py init /path/to/code --workers 1`
+- Check system memory if receiving out-of-memory errors
 
 ### Watch Mode Problems
 
@@ -560,6 +599,52 @@ If watch mode isn't detecting changes:
 - Verify the project path is set correctly
 - Check file permissions
 - Make sure files have supported extensions
+
+### Memory Usage Issues
+
+If encountering memory problems:
+- Enable disk streaming in config.yml:
+  ```yaml
+  parallel_processing:
+    memory_limit_percentage: 70.0
+    stream_to_disk: true
+    cache_dir: .cache
+  ```
+- Reduce the batch size for processing: `--batch-size 5`
+- Use distributed processing for very large codebases
+
+### Model Selection
+
+If having issues with specific models:
+- List available models: `python cli.py set-model --list`
+- Set a different default model: `python cli.py set-model meta-llama/Llama-3-70B-Instruct`
+- Check for model availability in the Together AI platform
+
+## Advanced Configuration
+
+You can customize the tool's behavior by modifying the `config.yml` file:
+
+```yaml
+# Model settings
+model:
+  default: meta-llama/Llama-3.3-70B-Instruct-Turbo
+  max_tokens: 4000
+  concise_responses: false
+
+# Parallel processing settings
+parallel_processing:
+  max_workers: 4
+  memory_limit_percentage: 80.0
+  stream_to_disk: true
+  cache_dir: .cache
+
+# Distributed processing
+distributed:
+  enabled: false
+  workers:
+    - worker1:5000
+    - worker2:5000
+```
 
 ## Contributing
 
