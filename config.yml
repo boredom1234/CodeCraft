@@ -1,23 +1,21 @@
-# CodeWhisperer Configuration
-
-# General settings
 chunk_size: 20
-overlap: 5
-max_history: 5
-temperature: 0.7
 debug: false
-generate_summary: false
-
-# Parallel processing settings
-parallel:
-  max_workers: null  # null means use CPU count
-  batch_size: 10    # Number of files to process in a batch for embeddings
-  
-# Distributed processing settings
 distributed:
+  batch_size: 50
   enabled: false
   workers:
-    - "localhost:5000"  # Example worker address
-    - "localhost:5001"
-    - "localhost:5002"
-  batch_size: 50  # Files per worker batch 
+  - localhost:5000
+  - localhost:5001
+  - localhost:5002
+generate_summary: false
+max_history: 5
+model:
+  concise_responses: true
+  max_tokens: 150
+  verbosity: low
+overlap: 5
+parallel:
+  batch_size: 10
+  max_workers: null
+response_mode: concise
+temperature: 0.5

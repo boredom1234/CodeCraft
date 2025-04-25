@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from analyzer import CodebaseAnalyzer, extract_code_structure
 import time
 from typing import Optional
+import re
 
 console = Console()
 
@@ -231,16 +232,23 @@ def init(source: str, github: bool, project: str = None, summary: bool = False, 
 @click.option('--chunks', type=int, help='Number of code chunks to use for context')
 @click.option('--reset', '-r', is_flag=True, help='Reset conversation history before starting')
 @click.option('--project', '-p', help='Project to use')
-def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bool = False, project: str = None):
+@click.option('--concise', is_flag=True, help='Force concise responses (1-2 sentences)')
+def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bool = False, project: str = None, concise: bool = False):
     """Ask questions about the codebase.
-
-    This command allows you to query the codebase for information or
-    suggestions. You can use it in interactive mode or provide a single
-    question.
-
+    
+    This command allows you to ask questions about your codebase and get intelligent answers.
+    You can use it in interactive mode to have a conversation with the AI.
+    
     Examples:
-        codeai ask --interactive
-        codeai ask "What does this function do?"
+    
+    # Ask a single question
+    python cli.py ask "How does the authentication system work?"
+    
+    # Start an interactive session
+    python cli.py ask -i
+    
+    # Get concise answers (1-2 sentences)
+    python cli.py ask --concise "What does the process_file function do?"
     """
     try:
         # Change to specified project if requested
@@ -262,6 +270,12 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
         
         async def handle_question(question: str):
             try:
+                # Handle some special queries directly
+                if re.search(r'what(?:\'s| is) the project name', question, re.IGNORECASE):
+                    name = analyzer.get_project_name()
+                    print(f"\nThe project name is: {name}\n")
+                    return
+                
                 with console.status("[bold yellow]Thinking...[/]"):
                     if composer:
                         # Get response in composer mode
@@ -346,14 +360,19 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
                             else:
                                 console.print("[yellow]Changes rejected - no modifications made[/]")
                     else:
-                        # Normal mode
-                        response = await analyzer.query(question, chunks)
-                        # The response is already formatted and printed by the _format_markdown_response method
-                        # so we don't need to print it again here
-                    
-                    # Save analyzer state to persist conversation history
-                    save_analyzer_state(analyzer)
-                    
+                        # Get response in normal mode, respecting concise flag
+                        if concise:
+                            # Add explicit concise instruction to question
+                            question_with_instruction = f"Answer in 1-2 short sentences only: {question}"
+                            response = await analyzer.query(question_with_instruction, chunks)
+                        else:
+                            response = await analyzer.query(question, chunks)
+                
+                print(f"\n{response}\n")
+                
+                # Save analyzer state to persist conversation history
+                save_analyzer_state(analyzer)
+                
             except Exception as e:
                 console.print(f"[bold red]Error generating response: {str(e)}[/]")
                 traceback.print_exc()
@@ -1114,6 +1133,16 @@ def assist(path: str = None, watch: bool = False, set_project_path: str = None):
                 console.print("[yellow]No project path specified or saved. Using current directory.[/]")
                 console.print("[yellow]Tip: Use --set-project-path to save a default project path.[/]")
         
+        # Define supported code file extensions
+        CODE_EXTENSIONS = [
+            '.py', '.js', '.ts', '.jsx', '.tsx',         # Python, JavaScript, TypeScript
+            '.java', '.cpp', '.c', '.h', '.hpp', '.cs',   # Java, C++, C#
+            '.go', '.rs',                                 # Go, Rust
+            '.html', '.css', '.scss', '.sass',            # Web files
+            '.vue', '.svelte',                            # Vue, Svelte
+            '.json', '.xml', '.yaml', '.yml'              # Data files
+        ]
+        
         async def review_code(file_path: str) -> None:
             try:
                 # Read file content
@@ -1165,10 +1194,12 @@ def assist(path: str = None, watch: bool = False, set_project_path: str = None):
                 console.print("[dim]Press Ctrl+C to stop[/]\n")
                 
                 while True:
-                    # Get all Python files in the directory
-                    files = list(Path(path).rglob('*.py'))
+                    # Get all code files in the directory with supported extensions
+                    all_files = []
+                    for ext in CODE_EXTENSIONS:
+                        all_files.extend(list(Path(path).rglob(f'*{ext}')))
                     
-                    for file_path in files:
+                    for file_path in all_files:
                         try:
                             mtime = os.path.getmtime(str(file_path))
                             if str(file_path) not in last_mtimes or mtime != last_mtimes[str(file_path)]:
@@ -1182,14 +1213,18 @@ def assist(path: str = None, watch: bool = False, set_project_path: str = None):
             except KeyboardInterrupt:
                 console.print("\n[yellow]Stopped watching[/]")
         else:
-            # Single review of all Python files
-            files = list(Path(path).rglob('*.py'))
-            if not files:
-                console.print(f"[yellow]No Python files found in {path}[/]")
+            # Review all code files with supported extensions
+            all_files = []
+            for ext in CODE_EXTENSIONS:
+                all_files.extend(list(Path(path).rglob(f'*{ext}')))
+            
+            if not all_files:
+                console.print(f"[yellow]No supported code files found in {path}[/]")
+                console.print(f"[dim]Supported extensions: {', '.join(CODE_EXTENSIONS)}[/]")
                 return
                 
-            console.print(f"[bold blue]Reviewing {len(files)} Python files in {path}...[/]\n")
-            for file_path in files:
+            console.print(f"[bold blue]Reviewing {len(all_files)} code files in {path}...[/]\n")
+            for file_path in all_files:
                 console.print(f"[dim]Reviewing {file_path}...[/]")
                 asyncio.run(review_code(str(file_path)))
             
@@ -1200,20 +1235,44 @@ def assist(path: str = None, watch: bool = False, set_project_path: str = None):
 def _detect_active_file() -> Optional[str]:
     """Try to detect which file the user is currently working on."""
     try:
-        # Try to find the most recently modified Python file in current directory
-        current_dir = Path('.')
-        python_files = list(current_dir.rglob('*.py'))
+        # List of supported code file extensions
+        CODE_EXTENSIONS = ['.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.cs', '.go', '.rs']
         
-        if not python_files:
+        current_dir = Path('.')
+        code_files = []
+        
+        # Find all supported code files
+        for ext in CODE_EXTENSIONS:
+            code_files.extend(list(current_dir.rglob(f'*{ext}')))
+        
+        if not code_files:
             return None
             
         # Sort by modification time, most recent first
-        python_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        code_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
         
-        return str(python_files[0])
+        return str(code_files[0])
         
     except Exception:
         return None
+
+@cli.command()
+def project_name():
+    """Display the current project name."""
+    try:
+        # Load analyzer state
+        analyzer = load_analyzer_state()
+        if not analyzer:
+            console.print("[yellow]No active project found. Please create or switch to a project first.[/]")
+            return
+        
+        # Get project name
+        name = analyzer.get_project_name()
+        console.print(f"[bold green]Current project name:[/] {name}")
+    except Exception as e:
+        console.print(f"[bold red]Error getting project name: {str(e)}[/]")
+        if os.getenv("DEBUG"):
+            traceback.print_exc()
 
 if __name__ == '__main__':
     cli()

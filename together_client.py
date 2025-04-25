@@ -4,6 +4,8 @@ from typing import List, Dict
 import os
 from dotenv import load_dotenv
 import asyncio
+import yaml
+from pathlib import Path
 
 class TogetherAIClient:
     def __init__(self, api_key: str = None):
@@ -91,69 +93,109 @@ class TogetherAIClient:
                            context: str = None,
                            history: str = None,
                            temperature: float = 0.7,
-                           max_tokens: int = 4000) -> str:
-        """Get completion from Together AI's LLM"""
+                           max_tokens: int = 4000,
+                           concise: bool = None) -> str:
+        """Get completion from Together AI's LLM
+        
+        Args:
+            prompt: The input prompt
+            context: Additional context to provide
+            history: Conversation history
+            temperature: Temperature for generation (higher = more creative)
+            max_tokens: Maximum tokens to generate
+            concise: Override to force concise responses
+        """
         try:
-            # Enhanced system prompt for more detailed responses
-            system_prompt = (
-                "You are a highly knowledgeable AI code assistant. Your responses should be comprehensive and detailed. "
-                "When analyzing code:"
-                "\n1. Always include relevant code snippets in your explanations"
-                "\n2. Explain what each piece of code does and how it works"
-                "\n3. Reference specific file paths and line numbers"
-                "\n4. Highlight important patterns and considerations"
-                "\n5. Provide context about dependencies and related components"
-                "\n6. Use markdown formatting for clarity"
-                "\n\nWhen answering questions about specific files:"
-                "\n- Always show the ACTUAL content of the file in your response"
-                "\n- DO NOT claim the file is not in the context if it's mentioned in the 'Relevant code context' section"
-                "\n- Start with an overview of the file's purpose and structure"
-                "\n- Show the most important parts of the file with code blocks"
-                "\n- Explain each function, class, or code section's purpose"
-                "\n\nWhen discussing code in general:"
-                "\n- Show the actual implementation details"
-                "\n- Explain the purpose and functionality"
-                "\n- Point out any important patterns or practices"
-                "\n- Include relevant error handling and edge cases"
-                "\n\nMaintain a technical and precise tone while being thorough in your explanations."
-                "\nFor any code review, maintain a balanced perspective highlighting both strengths and areas for improvement."
-                "\nWhen receiving feedback, acknowledge it professionally and adjust your subsequent responses accordingly."
-                "\n\nIMPORTANT: Your responses should be very detailed and comprehensive. Short answers are insufficient."
-                "\nTake the time to provide thorough explanations with examples, code snippets, and detailed analysis."
-            )
+            # Load config to check for concise setting
+            import yaml
+            import os
+            from pathlib import Path
+            
+            # Default to verbose responses unless specifically overridden
+            use_concise = False
+            
+            # Check config.yml for concise mode setting
+            config_path = Path('config.yml')
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                    # Check for concise mode in multiple possible locations
+                    use_concise = (
+                        config.get('response_mode') == 'concise' or
+                        config.get('model', {}).get('concise_responses', False) or
+                        config.get('model', {}).get('verbosity') == 'low'
+                    )
+            
+            # Parameter overrides config if provided
+            if concise is not None:
+                use_concise = concise
+                
+            # Get max token setting from config
+            config_max_tokens = None
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                    config_max_tokens = config.get('model', {}).get('max_tokens')
+            
+            # Use config max tokens if available and not explicitly overridden
+            if config_max_tokens is not None and max_tokens == 4000:  # 4000 is the default
+                max_tokens = config_max_tokens
+            
+            # Select system prompt based on verbosity setting
+            if use_concise:
+                system_prompt = (
+                    "You are a concise AI code assistant. Your responses should be brief and to the point. "
+                    "When analyzing code:"
+                    "\n1. Keep explanations very brief, 1-2 sentences maximum"
+                    "\n2. Only include the most critical information"
+                    "\n3. Focus only on answering the direct question without elaboration"
+                    "\n4. Avoid showing code snippets unless specifically requested"
+                    "\n5. Never add background information or context"
+                    "\n6. No formatting, markdown, or explanatory text"
+                    "\n\nKeep your total response under 150 words. Be direct and avoid any explanation beyond what's needed."
+                )
+            else:
+                system_prompt = (
+                    "You are a highly knowledgeable AI code assistant. Your responses should be comprehensive and detailed. "
+                    "When analyzing code:"
+                    "\n1. Always include relevant code snippets in your explanations"
+                    "\n2. Explain what each piece of code does and how it works"
+                    "\n3. Reference specific file paths and line numbers"
+                    "\n4. Highlight important patterns and considerations"
+                    "\n5. Provide context about dependencies and related components"
+                    "\n6. Use markdown formatting for clarity"
+                    "\n\nWhen answering questions about specific files:"
+                    "\n- Always show the ACTUAL content of the file in your response"
+                    "\n- DO NOT claim the file is not in the context if it's mentioned in the 'Relevant code context' section"
+                    "\n- Start with an overview of the file's purpose and structure"
+                    "\n- Show the most important parts of the file with code blocks"
+                    "\n- Explain each function, class, or code section's purpose"
+                    "\n\nWhen discussing code in general:"
+                    "\n- Show the actual implementation details"
+                    "\n- Explain the purpose and functionality"
+                    "\n- Point out any important patterns or practices"
+                    "\n- Include relevant error handling and edge cases"
+                    "\n\nMaintain a technical and precise tone while being thorough in your explanations."
+                    "\nFor any code review, maintain a balanced perspective highlighting both strengths and areas for improvement."
+                    "\nWhen receiving feedback, acknowledge it professionally and adjust your subsequent responses accordingly."
+                    "\n\nIMPORTANT: Your responses should be very detailed and comprehensive. Short answers are insufficient."
+                    "\nTake the time to provide thorough explanations with examples, code snippets, and detailed analysis."
+                )
             
             messages = [{"role": "system", "content": system_prompt}]
             
-            # Add conversation history as chat messages for better context
+            # Better handling of conversation history - parse the formatted history into proper chat format
             if history and history.strip():
-                # Convert history to actual conversation format
-                conversation_so_far = []
-                history_lines = history.strip().split('\n\n')
+                # Try to parse User/Assistant format
+                history_lines = history.split('\n\n')
                 
-                for i in range(0, len(history_lines), 2):
-                    if i+1 < len(history_lines):
-                        q_part = history_lines[i]
-                        a_part = history_lines[i+1]
-                        
-                        if q_part.startswith('Question'):
-                            q_text = q_part.split('\n', 1)[1] if '\n' in q_part else q_part
-                            messages.append({"role": "user", "content": q_text})
-                        
-                        if a_part.startswith('Answer'):
-                            a_text = a_part.split('\n', 1)[1] if '\n' in a_part else a_part
-                            messages.append({"role": "assistant", "content": a_text})
-                        
-                        # Add to readable conversation summary
-                        conversation_so_far.append(f"User: {q_text}")
-                        conversation_so_far.append(f"Assistant: {a_text}")
-                
-                # Add a system message with conversation summary to help the LLM understand
-                if conversation_so_far:
-                    summary = "\n\n".join(conversation_so_far)
-                    messages.append({
-                        "role": "system", 
-                        "content": f"Here's a summary of the conversation so far, which you MUST consider when answering:\n\n{summary}"
-                    })
+                for entry in history_lines:
+                    if entry.startswith('User:'):
+                        user_content = entry.replace('User:', '', 1).strip()
+                        messages.append({"role": "user", "content": user_content})
+                    elif entry.startswith('Assistant:'):
+                        assistant_content = entry.replace('Assistant:', '', 1).strip()
+                        messages.append({"role": "assistant", "content": assistant_content})
             
             # Add the current context and question
             if context:

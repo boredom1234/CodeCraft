@@ -1,5 +1,5 @@
 # analyzer.py
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Set, Union, Any
 import faiss
 import numpy as np
 from pathlib import Path
@@ -29,6 +29,32 @@ from collections import defaultdict
 from parallel_processor import ParallelProcessor
 
 console = Console()
+
+# Common words to filter out of code element searches
+COMMON_WORDS = {
+    # Keywords
+    'if', 'else', 'for', 'while', 'function', 'class', 'return', 'import', 'export',
+    'const', 'let', 'var', 'async', 'await', 'try', 'catch', 'finally', 'switch',
+    'case', 'break', 'continue', 'default', 'in', 'of', 'new', 'this', 'super', 'extends',
+    'implements', 'interface', 'type', 'from', 'static', 'public', 'private', 'protected',
+    'get', 'set', 'null', 'undefined', 'true', 'false', 'void', 'with', 'as', 'is',
+    
+    # Common variable names
+    'i', 'j', 'k', 'x', 'y', 'z', 'a', 'b', 'c', 'val', 'value', 'key', 'item', 'data',
+    'result', 'res', 'err', 'error', 'e', 'obj', 'object', 'arr', 'array', 'list', 'str',
+    'string', 'num', 'number', 'bool', 'boolean', 'func', 'fn', 'callback', 'cb', 'options',
+    'opts', 'config', 'params', 'args', 'props', 'state',
+    
+    # Common HTML attributes
+    'id', 'className', 'class', 'style', 'href', 'src', 'alt', 'title', 'name', 'value',
+    'type', 'onClick', 'onChange', 'onSubmit', 'disabled', 'required', 'checked', 'selected',
+    
+    # Common method names
+    'toString', 'valueOf', 'map', 'filter', 'reduce', 'forEach', 'find', 'findIndex',
+    'indexOf', 'push', 'pop', 'shift', 'unshift', 'join', 'split', 'slice', 'splice',
+    'concat', 'sort', 'reverse', 'length', 'charAt', 'substring', 'startsWith', 'endsWith',
+    'includes', 'hasOwnProperty', 'then', 'catch'
+}
 
 class CodeStructure:
     """Helper class to track code structure and context.
@@ -628,10 +654,147 @@ class CodebaseAnalyzer:
             self.console.print(text)
 
     async def query(self, question: str, chunk_count: int = None) -> str:
-        """Query the codebase with enhanced semantic understanding."""
+        """Query the codebase with enhanced semantic understanding and code-aware retrieval."""
         try:
-            # Analyze query intent and context
+            # Analyze query for code-specific elements and intent
+            code_query_analysis = self._analyze_code_query(question)
+            
+            # Enhance the standard query context with code-specific analysis
             query_context = self._analyze_query(question)
+            query_context.update({
+                'code_analysis': code_query_analysis,
+                'exact_line': code_query_analysis.get('exact_line'),
+                'code_elements': code_query_analysis.get('code_elements', []),
+                'is_location_query': code_query_analysis.get('is_location_query', False)
+            })
+            
+            # Log analysis for debugging
+            print(f"Searching for relevant code to answer: {question}")
+            
+            # For exact line search, prioritize finding that exact line
+            if code_query_analysis.get('exact_line') and code_query_analysis.get('is_location_query'):
+                exact_line = code_query_analysis.get('exact_line')
+                console.print(f"[dim]Looking for exact line: {exact_line}[/]")
+                
+                # Try to find the exact line in all files
+                found_files = []
+                for i, doc in enumerate(self.documents):
+                    # Normalize whitespace for more robust matching
+                    normalized_line = re.sub(r'\s+', ' ', exact_line).strip()
+                    normalized_doc = re.sub(r'\s+', ' ', doc).strip()
+                    
+                    if normalized_line in normalized_doc:
+                        metadata = self.metadata[i]
+                        found_files.append((doc, metadata))
+                
+                if found_files:
+                    # Construct direct response using the found files
+                    direct_response = "The line was found in the following files:\n\n"
+                    for doc, metadata in found_files:
+                        file_path = metadata.get('file', 'Unknown file')
+                        start_line = metadata.get('start_line', 0)
+                        end_line = metadata.get('end_line', 0)
+                        language = metadata.get('language', 'Unknown')
+                        
+                        # Extract the context around the line
+                        lines = doc.split('\n')
+                        exact_line_num = None
+                        for i, line in enumerate(lines):
+                            normalized_line_content = re.sub(r'\s+', ' ', line).strip()
+                            if normalized_line in normalized_line_content:
+                                exact_line_num = start_line + i
+                                break
+                        
+                        if exact_line_num:
+                            direct_response += f"File: {file_path}\n"
+                            direct_response += f"Line: {exact_line_num}\n"
+                            direct_response += "Context:\n"
+                            
+                            # Show a few lines before and after for context
+                            context_start = max(0, exact_line_num - start_line - 3)
+                            context_end = min(len(lines), exact_line_num - start_line + 4)
+                            
+                            for i in range(context_start, context_end):
+                                line_num = start_line + i
+                                prefix = "→ " if line_num == exact_line_num else "  "
+                                direct_response += f"{prefix}{line_num}: {lines[i]}\n"
+                            direct_response += "\n"
+                    
+                    # Create direct response
+                    return direct_response
+            
+            # For file-specific queries, directly extract the file content if it exists
+            if query_context.get('is_file_query', False) and query_context.get('target_file'):
+                target_file_name = query_context.get('target_file')
+                console.print(f"[bold green]Looking for file: {target_file_name}[/]")
+                
+                # Try more aggressively to find the file
+                file_content = await self._find_and_extract_file_content(target_file_name)
+                
+                if file_content:
+                    # If file was found, create a special direct file context
+                    console.print(f"[bold green]File found directly: {target_file_name}[/]")
+                    direct_file_context = self._create_direct_file_context(target_file_name, file_content)
+                    
+                    # Save the file content in the query context for follow-up questions
+                    query_context['file_content'] = file_content
+                    
+                    # Generate response with direct file context
+                    history_context = ""
+                    if self.conversation_history:
+                        history_context = self._prepare_filtered_history(question, query_context)
+                    
+                    response = await self._generate_direct_file_response(
+                        question,
+                        direct_file_context,
+                        history_context,
+                        query_context
+                    )
+                    
+                    # Update conversation history
+                    self._update_conversation_history(question, response, query_context)
+                    
+                    return response
+                else:
+                    console.print(f"[yellow]File not found directly: {target_file_name}, continuing with semantic search[/]")
+                    
+                    # If file not found directly, let's search more aggressively through the indexed documents
+                    console.print(f"[blue]Searching through indexed documents for file: {target_file_name}[/]")
+                    for metadata_item in self.metadata:
+                        file_path = metadata_item.get('file', '')
+                        if file_path.endswith(target_file_name):
+                            console.print(f"[green]Found indexed file path: {file_path}[/]")
+                            # Try to read the file directly
+                            try:
+                                full_path = self.path / file_path
+                                with open(full_path, 'r', encoding='utf-8') as f:
+                                    file_content = f.read()
+                                
+                                console.print(f"[bold green]Successfully read file: {full_path}[/]")
+                                direct_file_context = self._create_direct_file_context(target_file_name, file_content)
+                                
+                                # Save the file content in the query context for follow-up questions
+                                query_context['file_content'] = file_content
+                                
+                                # Generate response with direct file context
+                                history_context = ""
+                                if self.conversation_history:
+                                    history_context = self._prepare_filtered_history(question, query_context)
+                                
+                                response = await self._generate_direct_file_response(
+                                    question,
+                                    direct_file_context,
+                                    history_context,
+                                    query_context
+                                )
+                                
+                                # Update conversation history
+                                self._update_conversation_history(question, response, query_context)
+                                
+                                return response
+                            except Exception as e:
+                                console.print(f"[red]Error reading found file: {str(e)}[/]")
+                                # Continue to semantic search as fallback
             
             # Check for existing file content from follow-up questions
             if 'file_content' in query_context and query_context.get('is_file_query', False):
@@ -657,108 +820,29 @@ class CodebaseAnalyzer:
                 self._update_conversation_history(question, response, query_context)
                 
                 return response
-            
-            # For file-specific queries, directly extract the file content if it exists
-            if query_context.get('is_file_query', False) and query_context.get('target_file'):
-                target_file_name = query_context.get('target_file')
-                file_content = self._find_and_extract_file_content(target_file_name)
-                
-                if file_content:
-                    # If file was found, create a special direct file context
-                    self.console.print(f"[bold green]File found directly: {target_file_name}[/]")
-                    direct_file_context = self._create_direct_file_context(target_file_name, file_content)
                     
-                    # Save the file content in the query context for follow-up questions
-                    query_context['file_content'] = file_content
-                    
-                    # Generate response with direct file context
-                    history_context = ""
-                    if self.conversation_history:
-                        history_context = self._prepare_filtered_history(question, query_context)
-                    
-                    response = await self._generate_direct_file_response(
-                        question,
-                        direct_file_context,
-                        history_context,
-                        query_context
-                    )
-                    
-                    # Update conversation history
-                    self._update_conversation_history(question, response, query_context)
-                    
-                    return response
-                else:
-                    self.console.print(f"[yellow]File not found directly: {target_file_name}, continuing with semantic search[/]")
-                    # Continue with regular semantic search if file not found directly
-            
-            # Continue with regular semantic search
-            # Get question embedding
-            question_embedding = await self.ai_client.get_embeddings([question])
-            question_vector = np.array(question_embedding).astype('float32')
-
-            # Determine optimal chunk count based on query complexity
-            if not chunk_count:
+            # Determine optimal number of chunks based on query complexity if not specified
+            if chunk_count is None:
                 chunk_count = self._determine_optimal_chunk_count(question, query_context)
-
-            # Get initial semantic matches
-            D, I = self.faiss_index.search(question_vector, chunk_count * 2)  # Get more candidates
             
-            # Display the search process to the user
-            self.console.print(f"[bold blue]Searching for relevant code to answer:[/] {question}")
-            self.console.print(f"[dim]Using {chunk_count} chunks for context[/]")
-
-            # Score and rank chunks based on multiple factors
-            scored_chunks = []
-            for idx in I[0]:
-                if idx < len(self.documents):
-                    chunk = self.documents[idx]
-                    
-                    # Handle both SemanticChunk objects and raw document strings
-                    if isinstance(chunk, SemanticChunk):
-                        # Get the embedding distance
-                        distance = D[0][list(I[0]).index(idx)]
-                        
-                        # Convert distance to similarity score (1/(1+distance) gives a value between 0-1)
-                        similarity_score = 1.0 / (1.0 + distance)
-                        
-                        # Use existing relevance calculation for SemanticChunk
-                        relevance_score = self._calculate_chunk_relevance(
-                            chunk,
-                            query_context,
-                            distance
-                        )
-                        
-                        # Store the scores in the chunk metadata for display
-                        chunk.metadata['similarity_score'] = similarity_score
-                        chunk.metadata['relevance_score'] = relevance_score
-                        
-                        scored_chunks.append((relevance_score, chunk))
-                    else:
-                        # For raw document strings, use a simpler relevance calculation
-                        # based just on the embedding distance
-                        distance = D[0][list(I[0]).index(idx)]
-                        similarity_score = 1.0 / (1.0 + distance)
-                        relevance_score = similarity_score
-                        
-                        # Create a simple metadata dict from the corresponding metadata
-                        metadata = self.metadata[idx] if idx < len(self.metadata) else {}
-                        metadata['similarity_score'] = similarity_score
-                        metadata['relevance_score'] = relevance_score
-                        
-                        # Create a temporary SemanticChunk for consistency
-                        temp_chunk = SemanticChunk(chunk, metadata)
-                        scored_chunks.append((relevance_score, temp_chunk))
-
-            # Sort by relevance and take top chunks
-            scored_chunks.sort(reverse=True, key=lambda x: x[0])
+            console.print(f"Using {chunk_count} chunks for context")
             
-            # Store the relevance scores in the chunk metadata before extracting just the chunks
-            for score, chunk in scored_chunks[:chunk_count]:
-                chunk.metadata['similarity_score'] = score  # Make sure the score is saved in metadata
+            # Get relevant chunks using the improved code-aware retrieval
+            selected_chunks = await self._get_relevant_chunks(question, chunk_count)
             
-            selected_chunks = [chunk for _, chunk in scored_chunks[:chunk_count]]
-
-            self.console.print(f"[bold green]Found {len(selected_chunks)} relevant code sections[/]")
+            # Log what files are being analyzed for the user
+            console.print(f"Found {len(selected_chunks)} relevant code sections")
+            
+            prev_file = None
+            for chunk in selected_chunks:
+                file_path = chunk.metadata.get('file', 'Unknown file')
+                relevance = self._calculate_chunk_relevance(chunk, query_context, 0.9) * 100
+                
+                if file_path != prev_file:
+                    console.print(f"Analyzing File: {file_path} [Relevance: {relevance:.2f}%]")
+                    prev_file = file_path
+                
+                console.print(f"  → Code Block  Relevance: {relevance:.2f}%")
 
             # Build context from chunks
             if selected_chunks:
@@ -794,24 +878,29 @@ class CodebaseAnalyzer:
             traceback.print_exc()
             raise
 
-    def _find_and_extract_file_content(self, target_file_name: str) -> Optional[str]:
+    async def _find_and_extract_file_content(self, target_file_name: str) -> Optional[str]:
         """Find a file by name in the repository and extract its contents."""
         try:
             # Search for files that match the target name (case-insensitive)
             matched_files = []
+            
+            # First try exact filename match (ignoring path)
             for root, _, files in os.walk(self.path):
                 for file in files:
                     if file.lower() == target_file_name.lower():
                         matched_files.append(Path(root) / file)
             
+            # If no exact matches, try partial matching
             if not matched_files:
-                # Try partial matching if no exact match
                 for root, _, files in os.walk(self.path):
                     for file in files:
                         if target_file_name.lower() in file.lower():
                             matched_files.append(Path(root) / file)
             
             if matched_files:
+                # Sort matches to prioritize exact name matches over path matches
+                matched_files.sort(key=lambda f: 0 if f.name.lower() == target_file_name.lower() else 1)
+                
                 # Use the first match (prioritize exact matches if any)
                 file_path = matched_files[0]
                 
@@ -883,14 +972,65 @@ class CodebaseAnalyzer:
     async def _generate_direct_file_response(self, question: str, file_context: str,
                                           history_context: str, query_context: Dict) -> str:
         """Generate response for direct file queries with complete file content."""
-        # Build a specialized prompt for file-specific questions
-        prompt_parts = [
-            "You are a friendly and helpful AI assistant analyzing code. Explain things in a natural, conversational way.",
-            "You're looking at a specific file that the user asked about.",
-            f"The file is: {query_context.get('target_file')}",
-            "Please be thorough but explain things like you're having a casual conversation with a fellow developer.",
-            "In your response, try to:"
-        ]
+        # Check for concise mode
+        config_path = Path('config.yml')
+        use_concise = False
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+                # Check for concise mode in multiple possible locations
+                use_concise = (
+                    config.get('response_mode') == 'concise' or
+                    config.get('model', {}).get('concise_responses', False) or
+                    config.get('model', {}).get('verbosity') == 'low'
+                )
+                
+        # Build prompt based on verbosity mode
+        if use_concise:
+            prompt_parts = [
+                "You are an AI code assistant. Your responses should be extremely concise.",
+                f"The file is: {query_context.get('target_file')}",
+                "Answer in 1-2 short sentences only. No elaboration."
+            ]
+            
+            # Add the question
+            prompt_parts.extend([
+                "\nUser's question:",
+                question
+            ])
+            
+            # Add the file context
+            prompt_parts.extend([
+                "\nFile content:",
+                file_context
+            ])
+            
+            # Add conversation history if relevant
+            if history_context:
+                prompt_parts.extend([
+                    "\nPrevious conversation (for reference only):",
+                    history_context
+                ])
+            
+            # Add final instructions
+            prompt_parts.extend([
+                "\nCRITICAL INSTRUCTIONS:",
+                "1. Answer in 1-2 short sentences only",
+                "2. No introductions or explanations",
+                "3. Directly answer the question without elaboration",
+                "4. Don't show code snippets unless explicitly requested",
+                "5. Maximum 100 words total",
+                "6. No markdown formatting"
+            ])
+        else:
+            # Original verbose prompt
+            prompt_parts = [
+                "You are a friendly and helpful AI assistant analyzing code. Explain things in a natural, conversational way.",
+                "You're looking at a specific file that the user asked about.",
+                f"The file is: {query_context.get('target_file')}",
+                "Please be thorough but explain things like you're having a casual conversation with a fellow developer.",
+                "In your response, try to:"
+            ]
 
         # Add specialized instructions based on file type
         file_extension = Path(query_context.get('target_file', '')).suffix.lower()
@@ -947,11 +1087,12 @@ class CodebaseAnalyzer:
         response = await self.ai_client.get_completion(
             enhanced_prompt,
             temperature=self.config.get('temperature', 0.7),
-            max_tokens=4000  # Ensure we have enough tokens for a detailed response
+            max_tokens=4000 if not use_concise else 250,  # Smaller token count for concise mode
+            concise=use_concise  # Pass concise flag to the AI client
         )
         
-        # Check if response is too short and try again with stronger instructions if needed
-        if len(response.split()) < 200:  # If response is less than ~200 words
+        # Only check for short responses in verbose mode
+        if not use_concise and len(response.split()) < 200:  # If response is less than ~200 words
             console.print("[yellow]Response too short, requesting a more detailed response...[/]")
             
             # Add even stronger instructions for detailed response
@@ -1193,164 +1334,189 @@ class CodebaseAnalyzer:
 
     def _determine_optimal_chunk_count(self, question: str, context: Dict) -> int:
         """Determine optimal number of chunks based on query complexity."""
-        base_count = 5  # Start with a smaller base
+        # Base chunk count
+        base_chunk_count = 10
         
-        # Always use more chunks for file-specific queries
-        if context.get('is_file_query', False):
-            base_count = 10  # Higher base count for file queries
-            self.console.print(f"[blue]File-specific query detected for {context.get('target_file')}. Using increased chunk count.[/]")
+        # Adjust based on question length and complexity
+        question_words = question.split()
+        question_length_factor = min(len(question_words) / 10, 3)  # Cap at tripling for long questions
         
-        # Adjust for query type
-        type_multipliers = {
-            'explain': 2.0,    # Need more context for explanations
-            'find': 1.5,       # Need a broader search
-            'modify': 1.8,     # Need surrounding context
-            'create': 1.5,     # Need examples
-            'error': 2.0       # Need more context for debugging
+        # Adjust based on query type
+        query_type_factors = {
+            'explain_code': 1.5,    # Code explanation needs more context
+            'find_bug': 1.2,        # Bug finding needs decent context
+            'suggest_improvements': 1.3,  # Improvement suggestions need good context
+            'architecture': 2.0,    # Architecture questions need the most context
+            'general': 1.0,         # General questions need standard context
         }
         
-        multiplier = type_multipliers.get(context['type'], 1.0)
+        query_type = context.get('type', 'general')
+        type_factor = query_type_factors.get(query_type, 1.0)
         
-        # Adjust for complexity factors
-        complexity_score = (
-            len(context['focus']) * 0.5 +  # More focus areas need more chunks
-            sum(len(elements) for elements in context['code_elements'].values()) * 0.3 +  # More code elements need more chunks
-            (2.0 if any(term in question.lower() for term in 
-                       ['architecture', 'structure', 'overall', 'entire', 'all']) else 0)  # System-level questions need more chunks
-        )
+        # Adjust for detected code elements
+        code_elements_factor = 1.0
+        if 'code_elements' in context:
+            # Handle code_elements as a list (new format)
+            if isinstance(context['code_elements'], list):
+                code_elements_factor += len(context['code_elements']) * 0.3
+            # Handle code_elements as a dict (old format)
+            elif isinstance(context['code_elements'], dict):
+                code_elements_factor += sum(len(elements) for elements in context['code_elements'].values()) * 0.3
         
-        # Calculate final count
-        chunk_count = int(base_count * multiplier * (1 + complexity_score))
+        # Adjust for file specificity
+        file_specificity_factor = 1.0
+        if context.get('is_file_query', False) and context.get('target_file'):
+            file_specificity_factor = 0.7  # File-specific queries need less context
         
-        # Different bounds for file-specific queries
-        if context.get('is_file_query', False):
-            return min(max(chunk_count, 10), 30)  # Higher minimum and maximum for file queries
+        # Apply boosts for special query types
+        implementation_boost = 1.5 if context.get('is_implementation_query', False) else 1.0
+        architecture_boost = 1.8 if 'architecture' in question.lower() else 1.0
         
-        # Keep within reasonable bounds for general queries
-        return min(max(chunk_count, 3), 20)  # Tighter bounds for more focused results
+        # Calculate final chunk count
+        final_chunk_count = int(base_chunk_count * 
+                               (1 + question_length_factor) * 
+                               type_factor * 
+                               code_elements_factor *
+                               file_specificity_factor *
+                               implementation_boost *
+                               architecture_boost)
+        
+        # Enforce reasonable limits
+        return max(5, min(30, final_chunk_count))
 
     async def _generate_enhanced_response(self, question: str, context: str,
                                        history_context: str, query_context: Dict) -> str:
         """Generate response with enhanced prompt engineering"""
-        # Build enhanced prompt
-        prompt_parts = [
-            "You are a friendly and helpful AI assistant analyzing code. Your responses should be conversational and easy to understand.",
-            "IMPORTANT: Explain things in a natural, chat-like way while still being thorough and detailed.",
-            "When discussing code, explain it in a way that feels like a conversation between developers.",
-            f"Question type: {query_context['type']}",
-            "Remember to be thorough but avoid overly formal or academic language."
-        ]
-        
-        # Add the question and context
-        prompt_parts.extend([
-            "\nQuestion:",
-            question,
-            "\nPlease explain in a natural, conversational way. Include:",
-            "1. Clear explanations of the relevant code",
-            "2. Examples where helpful",
-            "3. Important details about how things work",
-            "4. Any related components or dependencies worth mentioning"
-        ])
-        
-        # Check if context is too large and needs to be truncated
-        if len(context) > 10000:  # Reduced from 12000 to be more conservative
-            console.print("[yellow]Context is very large, truncating to fit token limits[/]")
+        # Check for concise mode
+        config_path = Path('config.yml')
+        use_concise = False
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+                # Check for concise mode in multiple possible locations
+                use_concise = (
+                    config.get('response_mode') == 'concise' or
+                    config.get('model', {}).get('concise_responses', False) or
+                    config.get('model', {}).get('verbosity') == 'low'
+                )
+                
+        # Build enhanced prompt based on verbosity mode
+        if use_concise:
+            prompt_parts = [
+                "You are an AI assistant analyzing code. Your responses should be extremely concise.",
+                "Keep your analysis to 1-2 short sentences maximum. Avoid all unnecessary explanation.",
+                f"Question type: {query_context['type']}",
+            ]
             
-            # Intelligent truncation strategy
-            if query_context.get('is_file_query', False) and query_context.get('target_file'):
-                target_file = query_context.get('target_file')
-                sections = context.split("### File: ")
-                
-                # Start with the header
-                if sections[0].startswith("## Code Context Summary"):
-                    truncated_context = [sections[0]]
-                else:
-                    truncated_context = ["## Code Context Summary\n"]
-                
-                # Separate target file sections from others
-                target_sections = []
-                other_sections = []
-                
-                for section in sections[1:]:
-                    if target_file.lower() in section.lower():
-                        target_sections.append(section)
-                    else:
-                        other_sections.append(section)
-                
-                # Add target file sections first
-                for section in target_sections:
-                    truncated_context.append("### File: " + section)
-                
-                # Add other sections if there's space
-                remaining_length = 10000 - len("\n".join(truncated_context))
-                for section in other_sections:
-                    section_text = "### File: " + section
-                    if len(section_text) < remaining_length:
-                        truncated_context.append(section_text)
-                        remaining_length -= len(section_text)
-                    else:
-                        break
-                
-                # Combine sections
-                context = "\n".join(truncated_context)
-                
-                # Final check if still too long
-                if len(context) > 10000:
-                    context = context[:10000] + "\n\n[Context truncated due to size]"
-            else:
-                # General truncation approach
-                sections = context.split("### File: ")
-                
-                # Keep the header
-                if sections[0].startswith("## Code Context Summary"):
-                    truncated_context = [sections[0]]
-                else:
-                    truncated_context = ["## Code Context Summary\n"]
-                
-                # Add sections until limit reached
-                remaining_length = 10000 - len(truncated_context[0])
-                for section in sections[1:]:
-                    section_text = "### File: " + section
-                    if len(section_text) < remaining_length:
-                        truncated_context.append(section_text)
-                        remaining_length -= len(section_text)
-                    else:
-                        break
-                
-                # Combine sections
-                context = "\n".join(truncated_context)
-                
-                # Final check if still too long
-                if len(context) > 10000:
-                    context = context[:10000] + "\n\n[Context truncated due to size]"
-        
-        # Add the context
-        prompt_parts.extend([
-            "\nRelevant code context:",
-            context
-        ])
-        
-        # Add conversation history if relevant
-        if history_context:
+            # Add the question and context
             prompt_parts.extend([
-                "\nRelevant conversation history:",
-                history_context
+                "\nQuestion:",
+                question,
+                "\nRelevant code context:",
+                context
             ])
-        
-        # Add final instructions for comprehensive response
-        prompt_parts.extend([
-            "\nCRITICAL INSTRUCTIONS FOR RESPONSE:",
-            "1. Your response MUST be at least 600 words in length to be sufficiently detailed",
-            "2. Start with a clear, extensive overview of the relevant code",
-            "3. Include and thoroughly explain actual code snippets from the files",
-            "4. Provide extremely detailed explanations of how the code works",
-            "5. Analyze implementation details, algorithmic choices, and code structure",
-            "6. Reference specific file paths and line numbers",
-            "7. Highlight any important patterns, edge cases or considerations",
-            "8. Format your response with markdown for readability",
-            "9. MAKE SURE TO INCLUDE ALL RELEVANT CODE SNIPPETS FROM THE CONTEXT",
-            "10. If you find yourself providing a short answer, EXPAND it with more analysis, examples, and details"
-        ])
+            
+            # Add conversation history if relevant
+            if history_context:
+                prompt_parts.extend([
+                    "\nPrevious conversation (consider this context when answering):",
+                    history_context
+                ])
+                
+            # Add specific concise instructions
+            prompt_parts.extend([
+                "\nCRITICAL INSTRUCTIONS:",
+                "1. Answer in 1-2 short sentences only",
+                "2. No introductions or explanations",
+                "3. Directly answer the question without elaboration",
+                "4. Don't show code snippets unless explicitly requested",
+                "5. Maximum 100 words total",
+                "6. No markdown formatting",
+                "7. If the question asks about previous conversation, refer to it accurately"
+            ])
+        else:
+            # Original verbose prompt
+            prompt_parts = [
+                "You are a friendly and helpful AI assistant analyzing code. Your responses should be conversational and easy to understand.",
+                "IMPORTANT: Explain things in a natural, chat-like way while still being thorough and detailed.",
+                "When discussing code, explain it in a way that feels like a conversation between developers.",
+                f"Question type: {query_context['type']}",
+                "Remember to be thorough but avoid overly formal or academic language."
+            ]
+            
+            # Add the question and context
+            prompt_parts.extend([
+                "\nQuestion:",
+                question,
+                "\nPlease explain in a natural, conversational way. Include:",
+                "1. Clear explanations of the relevant code",
+                "2. Examples where helpful",
+                "3. Important details about how things work",
+                "4. Any related components or dependencies worth mentioning"
+            ])
+            
+            # Add specific context based on query type
+            if query_context['type'] == 'explain_code':
+                prompt_parts.extend([
+                    "\nWhen explaining this code:",
+                    "- Start with a friendly overview of what the code does",
+                    "- Point out the interesting parts and how they connect",
+                    "- Explain any important algorithms or patterns used",
+                    "- Mention any edge cases or performance considerations"
+                ])
+            elif query_context['type'] == 'find_bug':
+                prompt_parts.extend([
+                    "\nWhen identifying bugs:",
+                    "- Clearly describe each potential issue you find",
+                    "- Explain why it's a problem and potential impacts",
+                    "- Suggest specific fixes with code examples",
+                    "- Consider edge cases and how they might trigger the bug"
+                ])
+            elif query_context['type'] == 'suggest_improvements':
+                prompt_parts.extend([
+                    "\nWhen suggesting improvements:",
+                    "- Start by acknowledging what works well in the code",
+                    "- Provide specific, actionable suggestions for improvements",
+                    "- Include code examples showing your suggested changes",
+                    "- Explain the benefits of each suggested improvement"
+                ])
+            elif query_context['type'] == 'architecture':
+                prompt_parts.extend([
+                    "\nWhen discussing architecture:",
+                    "- Provide a clear overview of the system components",
+                    "- Explain how they connect and interact",
+                    "- Discuss the strengths and potential weaknesses of the design",
+                    "- Suggest any architectural adjustments that might help"
+                ])
+            
+            # Add relevant code context
+            prompt_parts.extend([
+                "\nRelevant code context:",
+                context
+            ])
+            
+            # Add conversation history if relevant
+            if history_context:
+                prompt_parts.extend([
+                    "\nPrevious conversation (consider this context when answering):",
+                    history_context
+                ])
+            
+            # Add final instructions for comprehensive response
+            prompt_parts.extend([
+                "\nCRITICAL INSTRUCTIONS FOR RESPONSE:",
+                "1. Your response MUST be at least 600 words in length to be sufficiently detailed",
+                "2. Start with a clear, extensive overview of the relevant code",
+                "3. Include and thoroughly explain actual code snippets from the files",
+                "4. Provide extremely detailed explanations of how the code works",
+                "5. Analyze implementation details, algorithmic choices, and code structure",
+                "6. Reference specific file paths and line numbers",
+                "7. Highlight any important patterns, edge cases or considerations",
+                "8. Format your response with markdown for readability",
+                "9. MAKE SURE TO INCLUDE ALL RELEVANT CODE SNIPPETS FROM THE CONTEXT",
+                "10. If the question refers to previous conversation, refer to it accurately",
+                "11. If you find yourself providing a short answer, EXPAND it with more analysis, examples, and details"
+            ])
         
         enhanced_prompt = "\n".join(filter(None, prompt_parts))
         
@@ -1358,11 +1524,13 @@ class CodebaseAnalyzer:
         response = await self.ai_client.get_completion(
             enhanced_prompt,
             temperature=self.config.get('temperature', 0.7),
-            max_tokens=4000  # Ensure we have enough tokens for a detailed response
+            max_tokens=4000 if not use_concise else 250,  # Smaller token count for concise mode
+            concise=use_concise,  # Pass concise flag to the AI client
+            history=history_context  # Pass conversation history explicitly
         )
         
-        # Check if response is too short and try again with stronger instructions if needed
-        if len(response.split()) < 200:  # If response is less than ~200 words
+        # Only check for short responses in verbose mode
+        if not use_concise and len(response.split()) < 200:  # If response is less than ~200 words
             console.print("[yellow]Response too short, requesting a more detailed response...[/]")
             
             # Add even stronger instructions for detailed response
@@ -1420,185 +1588,161 @@ class CodebaseAnalyzer:
         return enhanced_text
 
     def _update_conversation_history(self, question: str, response: str, query_context: Dict):
-        """Update conversation history with context"""
-        self.conversation_history.append({
-            "question": question,
-            "answer": response,
-            "context": query_context
-        })
-        if len(self.conversation_history) > 5:
+        """Update conversation history with new exchange."""
+        # Enforce maximum history length by removing oldest exchanges if needed
+        max_history = self.config.get('max_history', 5)
+        while len(self.conversation_history) >= max_history:
             self.conversation_history.pop(0)
+            
+        # Add new exchange with timestamp and query context
+        self.conversation_history.append({
+            'question': question,
+            'answer': response,
+            'timestamp': datetime.datetime.now().isoformat(),
+            'query_context': {
+                'type': query_context.get('type', 'general'),
+                'is_file_query': query_context.get('is_file_query', False),
+                'target_file': query_context.get('target_file', None),
+            }
+        })
+        
+        # Debug info
+        print(f"Conversation history saved with {len(self.conversation_history)} exchanges")
 
     def _prepare_filtered_history(self, question: str, query_context: Dict) -> str:
-        """Prepare filtered conversation history for context"""
-        # For file-specific follow-up questions, try to find previous exchanges about the same file
-        if query_context.get('is_file_query', False) and query_context.get('target_file'):
-            # Current file query
-            target_file = query_context.get('target_file').lower()
-            file_specific_history = []
-            
-            # Look for previous exchanges about this file
-            for exchange in self.conversation_history:
-                exchange_context = exchange.get('context', {})
-                if exchange_context.get('is_file_query') and exchange_context.get('target_file'):
-                    if exchange_context.get('target_file').lower() == target_file:
-                        file_specific_history.append(exchange)
-            
-            if file_specific_history:
-                self.console.print(f"[blue]Found {len(file_specific_history)} previous exchanges about {target_file}[/]")
-                return self._format_conversation_history(file_specific_history)
-        
-        # For vague follow-up questions like "explain this", "tell me more", etc.
-        follow_up_indicators = ['this', 'that', 'these', 'those', 'it', 'them', 'more', 'explain']
-        is_follow_up = any(word in question.lower().split() for word in follow_up_indicators) and len(question.split()) < 6
-        
-        if is_follow_up and self.conversation_history:
-            # Use the most recent exchange as context
-            self.console.print("[blue]Detected follow-up question, using most recent exchange for context[/]")
-            last_exchange = self.conversation_history[-1]
-            follow_up_context = query_context.copy()
-            
-            # Copy relevant context from the previous question
-            prev_context = last_exchange.get('context', {})
-            if prev_context.get('is_file_query') and prev_context.get('target_file'):
-                follow_up_context['is_file_query'] = True
-                follow_up_context['target_file'] = prev_context.get('target_file')
-                query_context.update(follow_up_context)  # Update the current query context
-                
-                # Use this opportunity to try direct file access again for the follow-up
-                target_file_name = prev_context.get('target_file')
-                file_content = self._find_and_extract_file_content(target_file_name)
-                if file_content:
-                    self.console.print(f"[bold green]Found file for follow-up question: {target_file_name}[/]")
-                    query_context['file_content'] = file_content
-            
-            return self._format_conversation_history([last_exchange])
-
-        if 'keywords' in query_context and query_context['keywords']:
-            # Filter by keywords if available
-            relevant_history = [
-                exchange for exchange in self.conversation_history
-                if any(term in exchange['question'].lower() for term in query_context['keywords'])
-            ]
-        else:
-            # Otherwise use all history up to a limit
-            relevant_history = self.conversation_history[-self.config.get('max_history', 5):]
-            
-        return self._format_conversation_history(relevant_history)
-
-    def _format_conversation_history(self, exchanges: List[Dict]) -> str:
-        """Format a list of conversation exchanges for context"""
-        if not exchanges:
+        """Prepare relevant conversation history based on current query context."""
+        if not self.conversation_history:
             return ""
             
-        history_parts = []
-        for i, exchange in enumerate(exchanges):
-            question_text = exchange['question'].strip()
-            answer_text = exchange['answer'].strip()
-            history_parts.append(f"Question {i+1}:\n{question_text}")
-            history_parts.append(f"Answer {i+1}:\n{answer_text}")
+        # Format history as clear question/answer pairs
+        formatted_history = []
+        for exchange in self.conversation_history:
+            q = exchange['question'].strip()
+            a = exchange['answer'].strip()
+            formatted_history.append(f"User: {q}\nAssistant: {a}")
+            
+        # Join all exchanges with clear separators
+        history = "\n\n".join(formatted_history)
         
-        return "\n\n".join(history_parts)
+        # Return formatted history with instruction
+        return f"Previous conversation history (please consider this context when answering):\n\n{history}"
+
+    def _format_conversation_history(self, history, include_timestamps=False, max_pairs=5):
+        """Format the conversation history in a consumable format.
+        
+        Args:
+            history: The conversation history
+            include_timestamps: Whether to include timestamps in the output
+            max_pairs: Maximum number of QA pairs to include
+        
+        Returns:
+            Formatted conversation history string
+        """
+        if not history:
+            return ""
+        
+        # Ensure we're only including the most recent exchanges
+        if len(history) > max_pairs:
+            history = history[-max_pairs:]
+        
+        formatted_entries = []
+        
+        for entry in history:
+            timestamp = entry.get("timestamp", "")
+            question = entry.get("question", "")
+            answer = entry.get("answer", "")
+            
+            # Format the user query with timestamp if requested
+            user_header = "User:"
+            if include_timestamps and timestamp:
+                user_header = f"User ({timestamp}):"
+            
+            formatted_entries.append(f"{user_header} {question}")
+            
+            # Format the assistant response
+            formatted_entries.append(f"Assistant: {answer}")
+        
+        # Join with double newlines for clear separation
+        return "\n\n".join(formatted_entries)
 
     def _analyze_query(self, question: str) -> Dict:
-        """Analyze query to extract semantic information"""
-        context = {
+        """Analyze the query to understand intent and extract key elements."""
+        query_info = {
             'type': 'general',
             'focus': [],
-            'scope': [],
-            'keywords': set(),
-            'code_elements': {
-                'classes': set(),
-                'functions': set(),
-                'variables': set(),
-                'imports': set()
-            },
-            'is_file_query': False,  # Flag for file-specific queries
-            'target_file': None      # Target file if specified
+            'code_elements': [],
+            'file_query': None,
+            'is_file_query': False,
+            'target_file': None,
+            'error_query': False,
+            'is_location_query': False,
+            'exact_line': None
         }
         
-        # Identify query type
-        type_patterns = {
-            'explain': r'explain|how|what|why|describe',
-            'find': r'find|where|locate|search',
-            'modify': r'change|modify|update|fix',
-            'create': r'create|add|implement|make',
-            'error': r'error|bug|issue|problem|fail'
-        }
-        
-        for qtype, pattern in type_patterns.items():
-            if re.search(pattern, question.lower()):
-                context['type'] = qtype
-                break
-        
-        # Check for file-specific queries (with file extensions)
+        # Enhanced file detection patterns - explicitly look for requests about files
         file_patterns = [
-            r'(?:the|a|an)?\s*([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)\s*(?:file|script|module)?',  # matches example.py
-            r'(?:file|script|module)\s+(?:named|called)?\s*([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)', # matches file named example.py
-            r'([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)\s*(?:file|script|module|code)'  # matches example.py file
+            r'(?:in|the|file)\s+([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)',  # Common file references
+            r'(?:show|open|display|contents of)\s+([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)',  # Show file commands
+            r'(?:what is|what\'s|tell me about)\s+([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)',  # Questions about files
+            r'(?:explain|describe|break down)(?:\s+me)?(?:\s+this)?\s+file[\s\:]?\s*([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)',  # Explain this file commands
+            r'([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)(?:\s+file)?$'  # Just the filename at the end
         ]
         
         for pattern in file_patterns:
-            matches = re.findall(pattern, question, re.IGNORECASE)
-            if matches:
-                context['is_file_query'] = True
-                context['target_file'] = matches[0]
-                # Add file name to focus
-                context['focus'].append(('file', matches[0]))
-                # Add file name to keywords with high priority
-                context['keywords'].add(matches[0])
+            match = re.search(pattern, question, re.IGNORECASE)
+            if match:
+                file_name = match.group(1)
+                query_info['is_file_query'] = True
+                query_info['target_file'] = file_name
+                query_info['file_query'] = file_name
                 break
         
-        # Extract code elements
-        code_patterns = {
-            'classes': r'class\s+(\w+)',
-            'functions': r'def\s+(\w+)|function\s+(\w+)',
-            'variables': r'\b[a-z_][a-z0-9_]*\b',
-            'imports': r'import\s+(\w+)|from\s+(\w+)'
-        }
+        # Quick classification of query type based on first few words
+        words = question.lower().split()
+        if len(words) >= 1:
+            if words[0] in ['explain', 'describe', 'what', 'detail']:
+                query_info['type'] = 'explain_code'
+            elif words[0] in ['how']:
+                query_info['type'] = 'explain_code'
+                if 'implemented' in question.lower() or 'implementation' in question.lower():
+                    query_info['is_implementation_query'] = True
+            elif words[0] in ['find', 'where', 'locate', 'search']:
+                query_info['type'] = 'find_bug'
+                if any(loc_word in question.lower() for loc_word in ['where', 'located', 'location', 'which file']):
+                    query_info['is_location_query'] = True
+            elif words[0] in ['improve', 'optimize', 'suggest', 'recommend']:
+                query_info['type'] = 'suggest_improvements'
+            elif words[0] in ['architecture', 'structure', 'design', 'organization']:
+                query_info['type'] = 'architecture'
         
-        for element_type, pattern in code_patterns.items():
-            matches = re.findall(pattern, question, re.IGNORECASE)
-            if matches:
-                context['code_elements'][element_type].update(
-                    m[0] if isinstance(m, tuple) else m for m in matches
-                )
-        
-        # Extract focus areas
-        focus_patterns = [
-            (r'in\s+(\w+[\w./]*)', 'file'),
-            (r'class\s+(\w+)', 'class'),
-            (r'function\s+(\w+)', 'function'),
-            (r'method\s+(\w+)', 'method')
-        ]
-        
-        for pattern, focus_type in focus_patterns:
-            matches = re.findall(pattern, question, re.IGNORECASE)
-            if matches:
-                context['focus'].extend((focus_type, m) for m in matches)
-        
-        # Extract keywords from the question
-        # First add significant words (longer than 3 chars)
-        for word in re.findall(r'\b\w+\b', question.lower()):
-            if len(word) > 3 and word not in ['what', 'does', 'this', 'that', 'with', 'from', 'have', 'about']:
-                context['keywords'].add(word)
-                
-        # Add all code element names as keywords
-        for element_type, elements in context['code_elements'].items():
-            context['keywords'].update(elements)
+        # Check for error/bug related queries
+        error_terms = ['error', 'bug', 'issue', 'problem', 'fail', 'crash', 'exception']
+        if any(term in question.lower() for term in error_terms):
+            query_info['error_query'] = True
             
-        # Add focus area names as keywords
-        for _, focus_name in context['focus']:
-            context['keywords'].add(focus_name.lower())
+        # Extract code elements (identifiers, class names, function names)
+        # Note: Now we're always returning a list for code_elements for consistency
+        identifiers = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', question)
+        filtered_identifiers = [id for id in identifiers if len(id) > 2]  # Filter out very short ones
+        query_info['code_elements'] = filtered_identifiers
             
-        # If we have no keywords, add some from the question type
-        if not context['keywords'] and context['type'] != 'general':
-            context['keywords'].add(context['type'])
-            
-        # Convert keywords set to list for easier serialization
-        context['keywords'] = list(context['keywords'])
+        # Extract focus keywords
+        focus_keywords = []
+        for word in words:
+            # Only consider medium-length words for focus keywords (avoid very short or long words)
+            if 4 <= len(word) <= 15 and word not in ['what', 'where', 'when', 'which', 'explain', 'detail']:
+                focus_keywords.append(word)
         
-        return context
+        # Take only a reasonable number of focus keywords
+        query_info['focus'] = focus_keywords[:5]
+        
+        # Check for exact code lines (quoted text)
+        if query_info['is_location_query']:
+            code_line_match = re.search(r'["\'`](.+?)["\'`]', question)
+            if code_line_match:
+                query_info['exact_line'] = code_line_match.group(1).strip()
+        
+        return query_info
     
     def _keyword_search(self, query: str) -> List[str]:
         """Search for files by keywords in query"""
@@ -2476,33 +2620,148 @@ class CodebaseAnalyzer:
         return "\n".join(context_parts)
 
     async def _get_relevant_chunks(self, query: str, chunk_count: int) -> List[SemanticChunk]:
-        """Retrieve relevant chunks from the codebase based on a query."""
-        try:
-            # Get question embedding
-            question_embedding = await self.ai_client.get_embeddings([query])
-            question_vector = np.array(question_embedding).astype('float32')
-
-            # Search for relevant chunks
-            D, I = self.faiss_index.search(question_vector, chunk_count)
-            
-            # Retrieve relevant chunks and ensure they are SemanticChunk objects
-            relevant_chunks = []
-            for idx in I[0]:
-                if idx < len(self.documents):
-                    chunk = self.documents[idx]
-                    # If it's already a SemanticChunk, use it as is
-                    if isinstance(chunk, SemanticChunk):
-                        relevant_chunks.append(chunk)
-                    # If it's a raw string, create a SemanticChunk with metadata
-                    else:
-                        metadata = self.metadata[idx] if idx < len(self.metadata) else {}
-                        relevant_chunks.append(SemanticChunk(chunk, metadata))
-            
-            return relevant_chunks
+        """Get chunks relevant to a query with improved code-aware retrieval.
         
-        except Exception as e:
-            console.print(f"[bold red]Error retrieving relevant chunks: {str(e)}[/]")
-            return []
+        This enhanced retrieval method:
+        1. Performs initial semantic search
+        2. Identifies code references (functions, classes, variables)
+        3. Expands the search to include those references
+        4. Prioritizes exact matches for code elements
+        5. Chains related code chunks across files
+        """
+        # First try exact pattern matching for code elements
+        exact_matches = []
+        
+        # Extract code elements like function/class/variable names from the query
+        code_elements = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', query)
+        code_elements = [e for e in code_elements if len(e) > 2 and e not in COMMON_WORDS]
+        
+        # Look for exact patterns in files first (prioritize exact matches)
+        exact_pattern_matches = set()
+        for element in code_elements:
+            # Skip very common words or short elements
+            if len(element) < 3 or element.lower() in COMMON_WORDS:
+                continue
+                
+            # First try an exact line match if a code line was provided
+            code_line_match = re.search(r'["\'`](.+?)["\'`]', query)
+            if code_line_match:
+                exact_line = code_line_match.group(1).strip()
+                for i, chunk in enumerate(self.documents):
+                    # Check for exact line match with normalization
+                    normalized_exact_line = re.sub(r'\s+', ' ', exact_line).strip()
+                    normalized_chunk = re.sub(r'\s+', ' ', chunk).strip()
+                    
+                    if normalized_exact_line in normalized_chunk:
+                        if i not in exact_pattern_matches:
+                            exact_pattern_matches.add(i)
+                            metadata = self.metadata[i]
+                            exact_matches.append(SemanticChunk(chunk, metadata))
+            
+            # Then try to match the specific element
+            pattern = r'\b' + re.escape(element) + r'\b'
+            for i, chunk in enumerate(self.documents):
+                if re.search(pattern, chunk):
+                    if i not in exact_pattern_matches:
+                        exact_pattern_matches.add(i)
+                        metadata = self.metadata[i]
+                        exact_matches.append(SemanticChunk(chunk, metadata))
+        
+        # Get semantic search results
+        query_embedding = await self.ai_client.get_embeddings([query])
+        if not query_embedding or not self.faiss_index:
+            return exact_matches[:chunk_count] if exact_matches else []
+            
+        # Search for similar chunks
+        scores, indices = self.faiss_index.search(np.array(query_embedding).astype(np.float32), k=chunk_count * 2)
+        
+        # Combine exact matches with semantic results
+        result_indices = set()
+        combined_results = []
+        
+        # First add exact matches (highest priority)
+        for chunk in exact_matches:
+            file_path = chunk.metadata.get('file', '')
+            line_range = f"{chunk.metadata.get('start_line', 0)}-{chunk.metadata.get('end_line', 0)}"
+            identifier = f"{file_path}:{line_range}"
+            if identifier not in result_indices:
+                result_indices.add(identifier)
+                combined_results.append(chunk)
+                
+        # Then add semantic search results
+        for score, idx in zip(scores[0], indices[0]):
+            if idx >= 0 and idx < len(self.documents) and score > 0:
+                chunk = self.documents[idx]
+                metadata = self.metadata[idx]
+                
+                # Skip if we already have this chunk from exact matches
+                file_path = metadata.get('file', '')
+                line_range = f"{metadata.get('start_line', 0)}-{metadata.get('end_line', 0)}"
+                identifier = f"{file_path}:{line_range}"
+                
+                if identifier not in result_indices:
+                    result_indices.add(identifier)
+                    semantic_chunk = SemanticChunk(chunk, metadata)
+                    combined_results.append(semantic_chunk)
+        
+        # Second phase retrieval - expand with related chunks based on code dependencies
+        if combined_results:
+            # Extract function calls, imports, and references
+            references = set()
+            for chunk in combined_results:
+                # Extract all identifiers
+                identifiers = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', chunk.content)
+                
+                # Add meaningful identifiers to references
+                for identifier in identifiers:
+                    if len(identifier) > 2 and identifier not in COMMON_WORDS:
+                        references.add(identifier)
+                        
+                # Check for imports or component references
+                for line in chunk.content.splitlines():
+                    # Check for import statements
+                    import_match = re.search(r'import\s+(\{[^}]+\}|\w+)', line)
+                    if import_match:
+                        import_name = import_match.group(1).strip('{}')
+                        references.update(re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', import_name))
+                        
+                    # Check for from ... import
+                    from_import = re.search(r'from\s+[\'"]([^\'"]+)[\'"]', line)
+                    if from_import:
+                        references.add(from_import.group(1))
+                        
+                    # Look for component references (React)
+                    component_ref = re.search(r'<(\w+)', line)
+                    if component_ref:
+                        references.add(component_ref.group(1))
+            
+            # Find chunks that define or use these references
+            expanded_chunks = []
+            for reference in references:
+                if len(reference) < 3 or reference.lower() in COMMON_WORDS:
+                    continue
+                    
+                pattern = r'\b' + re.escape(reference) + r'\b'
+                for i, chunk in enumerate(self.documents):
+                    # Skip chunks we already have
+                    metadata = self.metadata[i]
+                    file_path = metadata.get('file', '')
+                    line_range = f"{metadata.get('start_line', 0)}-{metadata.get('end_line', 0)}"
+                    identifier = f"{file_path}:{line_range}"
+                    
+                    if identifier not in result_indices and re.search(pattern, chunk):
+                        result_indices.add(identifier)
+                        expanded_chunks.append(SemanticChunk(chunk, metadata))
+                        
+                        # Don't add too many expanded chunks
+                        if len(expanded_chunks) >= chunk_count:
+                            break
+            
+            # Add expanded chunks to results, up to the chunk count limit
+            combined_results.extend(expanded_chunks)
+        
+        # Return the top chunks
+        return combined_results[:chunk_count]
 
     async def explain_code(self, code: str, context: str = None, detail_level: str = "medium") -> str:
         """Explain code in a natural, conversational way."""
@@ -2859,3 +3118,119 @@ class CodebaseAnalyzer:
                 'type': 'Error',
                 'description': f'Error analyzing file: {str(e)}'
             }]
+
+    def _analyze_code_query(self, query: str) -> Dict:
+        """Enhanced analysis for code-specific queries.
+        
+        This method extracts code elements, references, and patterns from the query
+        to improve search relevance for code-specific questions.
+        
+        Returns:
+            Dict with query analysis information
+        """
+        result = {
+            'exact_line': None,           # Exact code line if found
+            'code_elements': [],          # Function/class/variable identifiers
+            'file_references': [],        # Mentioned file paths
+            'imports': [],                # Import statements
+            'function_calls': [],         # Function calls with arguments
+            'is_location_query': False,   # True if asking about where code is located
+            'is_implementation_query': False, # True if asking about how something is implemented
+            'is_usage_query': False,      # True if asking about how something is used
+            'language_context': None,     # Programming language if detected
+        }
+        
+        # Detect exact code lines (quoted)
+        code_line_match = re.search(r'["\'`](.+?)["\'`]', query)
+        if code_line_match:
+            result['exact_line'] = code_line_match.group(1).strip()
+            
+            # Further analyze the extracted code line
+            if result['exact_line']:
+                # Check for imports
+                import_match = re.search(r'import\s+(.+?)(?:from\s+["\'](.+?)["\'])?', result['exact_line'])
+                if import_match:
+                    imports = import_match.group(1).strip()
+                    result['imports'].append(imports)
+                    if import_match.group(2):
+                        result['file_references'].append(import_match.group(2))
+                
+                # Check for function calls
+                func_call_match = re.search(r'(\w+)\s*\((.+?)\)', result['exact_line'])
+                if func_call_match:
+                    result['function_calls'].append({
+                        'name': func_call_match.group(1),
+                        'args': func_call_match.group(2)
+                    })
+                
+                # Check for variable declarations
+                var_decl_match = re.search(r'(?:const|let|var)\s+(.+?)\s*=', result['exact_line'])
+                if var_decl_match:
+                    # If it's a destructuring assignment, extract all variables
+                    if '{' in var_decl_match.group(1):
+                        # Extract variables from destructuring pattern
+                        destructured_vars = re.findall(r'\b(\w+)\b', var_decl_match.group(1))
+                        result['code_elements'].extend(destructured_vars)
+                    else:
+                        result['code_elements'].append(var_decl_match.group(1).strip())
+        
+        # Extract code elements from the entire query
+        code_elements = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', query)
+        code_elements = [e for e in code_elements if len(e) > 2 and e.lower() not in COMMON_WORDS]
+        result['code_elements'].extend([e for e in code_elements if e not in result['code_elements']])
+        
+        # Look for file path references
+        file_paths = re.findall(r'(?:^|\s)([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)', query)
+        result['file_references'].extend([f for f in file_paths if f not in result['file_references']])
+        
+        # Detect query intent
+        location_keywords = ['where', 'location', 'located', 'find', 'which file', 'which module']
+        implementation_keywords = ['how', 'implement', 'implementation', 'code for', 'source code']
+        usage_keywords = ['use', 'usage', 'used', 'call', 'called', 'invoke', 'utilizing']
+        
+        for keyword in location_keywords:
+            if keyword.lower() in query.lower():
+                result['is_location_query'] = True
+                break
+                
+        for keyword in implementation_keywords:
+            if keyword.lower() in query.lower():
+                result['is_implementation_query'] = True
+                break
+                
+        for keyword in usage_keywords:
+            if keyword.lower() in query.lower():
+                result['is_usage_query'] = True
+                break
+        
+        # Detect language context
+        languages = {
+            'javascript': ['.js', 'javascript', 'js', 'node', 'npm', 'react', 'angular', 'vue'],
+            'typescript': ['.ts', '.tsx', 'typescript', 'ts', 'tsc'],
+            'python': ['.py', 'python', 'py', 'pip', 'django', 'flask'],
+            'java': ['.java', 'java', 'maven', 'gradle', 'spring'],
+            'csharp': ['.cs', 'c#', 'csharp', '.net', 'dotnet'],
+            'cpp': ['.cpp', '.hpp', 'c++', 'cpp'],
+            'rust': ['.rs', 'rust', 'cargo'],
+            'go': ['.go', 'golang'],
+        }
+        
+        for language, markers in languages.items():
+            for marker in markers:
+                if marker.lower() in query.lower():
+                    result['language_context'] = language
+                    break
+            if result['language_context']:
+                break
+                
+        return result
+
+    def get_project_name(self) -> str:
+        """Get the current project name."""
+        if hasattr(self, 'project_name') and self.project_name:
+            return self.project_name
+        elif hasattr(self, 'path'):
+            # If no project name is set, use the directory name
+            return os.path.basename(os.path.normpath(self.path))
+        else:
+            return "CodeWhisperer"  # Default name

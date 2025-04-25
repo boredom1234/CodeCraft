@@ -49,6 +49,8 @@ Follow these steps in order to start using the AI Code Reviewer:
 python cli.py create-project PROJECT_NAME
 ```
 
+Projects help you organize different codebases and maintain separate conversation histories.
+
 ### 2. Initialize Your Codebase
 
 ```bash
@@ -56,29 +58,24 @@ python cli.py create-project PROJECT_NAME
 python cli.py init /path/to/code
 
 # Initialize from GitHub
-python cli.py init /path/to/code --github
+python cli.py init https://github.com/user/repo --github
 ```
 
-### 3. Set Project Path
+This step indexes your codebase for semantic search and analysis.
+
+### 3. Start Using the Tool
+
+You can now interact with your codebase in various ways:
 
 ```bash
-python cli.py assist --set-project-path /path/to/your/project
-```
-
-### 4. Start Code Review
-
-```bash
-# Review using saved project path
-python cli.py assist
-
-# Continuously monitor for changes (watch mode)
-python cli.py assist --watch
-```
-
-### 5. Ask Questions About Your Code
-
-```bash
+# Ask questions about your code
 python cli.py ask -i "How does the authentication system work?"
+
+# Get live code reviews
+python cli.py assist --watch
+
+# Get code suggestions
+python cli.py suggest file.py --line 42
 ```
 
 ## Key Features
@@ -154,6 +151,15 @@ python cli.py ask -i "How does the authentication system work?"
 
 ## Usage Guide
 
+### Understanding Commands and Workflow
+
+The tool follows a typical workflow:
+
+1. **Configure**: Set up your API key
+2. **Create Project**: Organize your codebase
+3. **Initialize**: Index your code for analysis
+4. **Interact**: Use various commands to analyze, query, and improve your code
+
 ### Understanding Review Output
 
 The tool provides focused feedback in the following format:
@@ -200,88 +206,331 @@ python cli.py complete file.py --line 42
 
 ## Command Reference
 
+Here is a comprehensive list of all available commands:
+
+### Core Commands
+
 | Command | Description | Example |
 |---------|-------------|---------|
-| `init` | **Initialize codebase (first step)** | `python cli.py init /path/to/code --github` |
-| `create-project` | Create project | `python cli.py create-project myapp` |
-| `configure` | Set up API key | `python cli.py configure` |
-| `assist` | Start code review | `python cli.py assist --watch` |
-| `ask` | Query the codebase | `python cli.py ask -i "How does X work?"` |
-| `list-projects` | List all projects | `python cli.py list-projects` |
-| `switch-project` | Change project | `python cli.py switch-project myapp` |
-| `status` | Show statistics | `python cli.py status --format json` |
-| `refresh` | Update codebase index | `python cli.py refresh --summary` |
-| `complete` | Get code completions | `python cli.py complete file.py --line 42` |
-| `suggest` | Get inline suggestions | `python cli.py suggest file.py --line 42` |
-| `explain` | Explain code sections | `python cli.py explain file.py --start-line 10 --end-line 20` |
-| `reset-history` | Clear conversation | `python cli.py reset-history` |
+| `configure` | Set up API key and settings | `python cli.py configure` |
+| `create-project` | Create a new project | `python cli.py create-project myapp` |
+| `init` | Initialize and index a codebase | `python cli.py init /path/to/code` |
+| `ask` | Ask questions about the codebase | `python cli.py ask -i "How does X work?"` |
+
+### Project Management Commands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `list-projects` | List all available projects | `python cli.py list-projects` |
+| `switch-project` | Switch to an existing project | `python cli.py switch-project myapp` |
 | `debug-projects` | Debug project registry | `python cli.py debug-projects` |
-| `compose` | Manage components | `python cli.py compose add testing` |
+| `status` | Show current project status and statistics | `python cli.py status --format json` |
 
-### Command Options
+### Code Analysis Commands
 
-#### `init` (First step)
-- `--github`: Initialize from GitHub URL
-- `--project`: Specify project name
-- `--summary`: Generate detailed summary
-- `--workers`: Number of parallel workers
+| Command | Description | Example |
+|---------|-------------|---------|
+| `assist` | Live code review assistant | `python cli.py assist --watch` |
+| `complete` | Get AI-powered code completions | `python cli.py complete file.py --line 42` |
+| `suggest` | Get intelligent inline code suggestions | `python cli.py suggest file.py --line 42` |
+| `explain` | Get natural language explanation of code | `python cli.py explain file.py --start-line 10 --end-line 20` |
+
+### Maintenance Commands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `refresh` | Refresh the codebase index | `python cli.py refresh --summary` |
+| `reset-history` | Reset conversation history | `python cli.py reset-history` |
+| `compose` | Manage project components and dependencies | `python cli.py compose add testing` |
+
+### Detailed Command Options
+
+#### `configure`
+Configures API keys and settings.
+
+```bash
+python cli.py configure
+```
+
+#### `create-project <project_name>`
+Creates a new project or switches to an existing one.
+
+```bash
+python cli.py create-project my_new_project
+```
+
+#### `init <source>`
+Initializes and indexes a codebase.
+
+Options:
+- `--github`: Treat source as GitHub URL
+- `--project, -p <project>`: Project name to store index in
+- `--summary`: Generate detailed codebase summary
+- `--example`: Show example usage
+- `--workers <workers>`: Number of parallel workers
+- `--batch-size <batch_size>`: Batch size for processing files (default: 10)
 - `--distributed`: Enable distributed processing
+- `--worker-addresses <worker_addresses>`: Comma-separated list of worker addresses for distributed processing
 
-#### `assist`
-- `--watch, -w`: Enable continuous monitoring
-- `--set-project-path`: Set default project path
+Examples:
+```bash
+# Initialize a local directory with parallel processing
+python cli.py init /path/to/codebase --workers 4 --batch-size 20
+
+# Initialize from a GitHub repository with distributed processing
+python cli.py init https://github.com/user/repo --github --distributed --worker-addresses host1:5000,host2:5000
+```
 
 #### `ask`
+Ask questions about the codebase.
+
+Options:
 - `--interactive, -i`: Start interactive mode
-- `--composer, -c`: Show changes as diffs
-- `--chunks`: Number of context chunks
-- `--reset, -r`: Reset conversation history
-- `--project, -p`: Specify project
+- `--composer, -c`: Show suggested changes as diffs
+- `--chunks <chunks>`: Number of code chunks to use for context
+- `--reset, -r`: Reset conversation history before starting
+- `--project, -p <project>`: Project to use
 
-#### `complete`
-- `--line, -l`: Line number for context
-- `--scope, -s`: Show scope information
-- `--patterns, -p`: Show similar patterns
+Examples:
+```bash
+# Interactive mode
+python cli.py ask --interactive
 
-#### `suggest`
-- `--line, -l`: Line number for suggestions
-- `--scope, -s`: Show scope information
-- `--threshold, -t`: Minimum relevance score
+# Show suggested changes as diffs
+python cli.py ask --composer
 
-#### `explain`
-- `--start-line, -s`: Start line number
-- `--end-line, -e`: End line number
-- `--detail, -d`: Level of detail (low/medium/high)
+# Set context size and reset history
+python cli.py ask --chunks 5 --reset
+```
+
+#### `list-projects`
+Lists all available projects.
+
+```bash
+python cli.py list-projects
+```
+
+#### `switch-project <project_name>`
+Switches to an existing project.
+
+```bash
+python cli.py switch-project backend_api
+```
+
+#### `status`
+Shows current project status and statistics.
+
+Options:
+- `--format, -f <format>`: Output format (text|json) for the status information
+
+Examples:
+```bash
+# Default text format
+python cli.py status
+
+# JSON format
+python cli.py status --format json
+```
+
+#### `refresh`
+Refreshes the codebase index by updating only changed files.
+
+Options:
+- `--project, -p <project>`: Project to refresh
+- `--summary`: Generate detailed codebase summary after refresh
+
+Examples:
+```bash
+# Refresh current project
+python cli.py refresh
+
+# Refresh specific project with summary
+python cli.py refresh --project myproject --summary
+```
+
+#### `reset-history`
+Resets conversation history while keeping codebase index.
+
+```bash
+python cli.py reset-history
+```
+
+#### `assist`
+Live code review assistant.
+
+Options:
+- `--watch, -w`: Watch mode - continuously review code changes
+- `--set-project-path <set_project_path>`: Set and save the project path for future use
+
+Examples:
+```bash
+# Set project path for future use
+python cli.py assist --set-project-path /path/to/your/project
+
+# Review using saved project path
+python cli.py assist
+
+# Watch mode for continuous review
+python cli.py assist --watch
+```
+
+#### `complete <file_path>`
+Get AI-powered code completions with full codebase context.
+
+Options:
+- `--line, -l <line>`: Line number for context
+- `--scope, -s`: Show current scope information
+- `--patterns, -p`: Show similar code patterns
+
+Examples:
+```bash
+# Get completion at specific line
+python cli.py complete path/to/file.py --line 42
+
+# Show scope and similar patterns
+python cli.py complete path/to/file.py --line 42 --scope --patterns
+```
+
+#### `suggest <file_path>`
+Get intelligent inline code suggestions with codebase awareness.
+
+Options:
+- `--line, -l <line>`: Line number to get suggestions for (required)
+- `--scope, -s`: Show current scope information
+- `--threshold, -t <threshold>`: Minimum relevance score (0-1)
+
+Examples:
+```bash
+# Get suggestions with default threshold
+python cli.py suggest path/to/file.py --line 42
+
+# Show scope and require high relevance
+python cli.py suggest path/to/file.py --line 42 --scope --threshold 0.8
+```
+
+#### `explain <file_path>`
+Get natural language explanation of code.
+
+Options:
+- `--start-line, -s <start_line>`: Start line number
+- `--end-line, -e <end_line>`: End line number
+- `--detail, -d <detail>`: Level of detail in explanation (low|medium|high)
+
+Examples:
+```bash
+# Explain entire file with medium detail
+python cli.py explain path/to/file.py
+
+# Explain specific lines with high detail
+python cli.py explain path/to/file.py --start-line 10 --end-line 20 --detail high
+```
+
+#### `debug-projects`
+Debug project registry (for development use).
+
+```bash
+python cli.py debug-projects
+```
+
+#### `compose <action> [component]`
+Manage project components and dependencies.
+
+Arguments:
+- `<action>`: Action to perform (add|remove|list)
+- `[component]`: Component to act on (required for add/remove)
+
+Examples:
+```bash
+# List available components
+python cli.py compose list
+
+# Add testing component
+python cli.py compose add testing
+
+# Remove logging component
+python cli.py compose remove logging
+```
 
 ## Examples
 
-### Complete Workflow Example
+### Complete Workflow Examples
+
+#### Basic Workflow
 
 ```bash
-# 1. Create a new project
+# 1. Configure API key
+python cli.py configure
+
+# 2. Create a new project
 python cli.py create-project frontend-app
 
-# 2. Initialize the codebase
-python cli.py init /path/to/frontend
+# 3. Initialize the codebase
+python cli.py init /path/to/frontend --project frontend-app
 
-# 3. Set the project path
-python cli.py assist --set-project-path /path/to/frontend
-
-# 4. Start watching for changes
-python cli.py assist --watch
-
-# 5. Ask questions about the code
+# 4. Ask questions about the code
 python cli.py ask -i "How does the router work?"
 ```
 
-### Working with Multiple Projects
+#### Advanced Analysis Workflow
 
 ```bash
+# 1. Set up project
+python cli.py create-project backend-api
+python cli.py init /path/to/backend --project backend-api
+
+# 2. Check project status
+python cli.py status
+
+# 3. Set project path for continuous review
+python cli.py assist --set-project-path /path/to/backend
+
+# 4. Start continuous review
+python cli.py assist --watch
+
+# 5. In another terminal, get specific suggestions
+python cli.py suggest /path/to/backend/auth/login.py --line 42 --scope
+```
+
+#### Working with Multiple Projects
+
+```bash
+# List all projects
+python cli.py list-projects
+
 # Switch between projects
 python cli.py switch-project backend-api
 
-# Review current project
-python cli.py assist
+# Refresh index after code changes
+python cli.py refresh
+
+# Check status in JSON format
+python cli.py status --format json
+```
+
+#### Code Enhancement Workflow
+
+```bash
+# Get detailed explanation of a complex function
+python cli.py explain /path/to/complex_module.py --start-line 120 --end-line 150 --detail high
+
+# Get completion suggestions
+python cli.py complete /path/to/module.py --line 75 --patterns
+
+# Get suggestions with high relevance
+python cli.py suggest /path/to/module.py --line 30 --threshold 0.8
+```
+
+#### Component Management
+
+```bash
+# List available components
+python cli.py compose list
+
+# Add testing infrastructure
+python cli.py compose add testing
+
+# Start interactive session with code composer
+python cli.py ask --interactive --composer
 ```
 
 ## Troubleshooting
@@ -292,12 +541,25 @@ If you encounter authentication errors:
 - Run `python cli.py configure` to re-enter your API key
 - Check your `.env` file and `~/.codeai/config.yml`
 
-### Review Issues
+### Project Registry Problems
 
-If the review process isn't working:
-- Ensure the project path is correctly set
+If you're having issues with projects:
+- Use `python cli.py debug-projects` to inspect the registry
+- Try recreating the project with `python cli.py create-project <name>`
+
+### Indexing Issues
+
+If initialization is failing:
 - Check file permissions
-- Verify the files are in supported languages
+- Ensure your codebase is accessible
+- Try running with fewer workers: `python cli.py init /path/to/code --workers 1`
+
+### Watch Mode Problems
+
+If watch mode isn't detecting changes:
+- Verify the project path is set correctly
+- Check file permissions
+- Make sure files have supported extensions
 
 ## Contributing
 

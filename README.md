@@ -93,6 +93,14 @@ python cli.py assist --set-project-path /path/to/your/project
 - **Together AI Integration**: Powered by state-of-the-art language models
 - **Smart Embeddings**: Generate and use embeddings for code analysis
 - **Interactive Mode**: Ask questions and get explanations about your code
+- **Concise Mode**: Get brief, direct answers instead of detailed explanations
+- **Code-Aware Retrieval**: Advanced search that understands code structure and relationships
+
+### 🔎 Advanced Code Search
+- **Exact Line Search**: Find precisely where specific code lines are located
+- **Cross-File References**: Understand relationships between components across files
+- **Semantic Code Understanding**: Find code based on functionality, not just text matching
+- **Context-Aware Results**: Results include necessary context from imports and related functions
 
 ## 💡 Basic Workflow
 
@@ -114,8 +122,17 @@ python cli.py assist --watch
 
 ### 3. Ask Questions About Your Code
 ```bash
-# Ask questions about your codebase
-python cli.py ask -i "How does the authentication system work?"
+# Ask a single question
+python cli.py ask "How does the authentication system work?"
+
+# Start an interactive session
+python cli.py ask -i
+
+# Get concise answers (1-2 sentences)
+python cli.py ask --concise "What does the process_file function do?"
+
+# Find exact code lines
+python cli.py ask "Where is this line located: const user = useUser();"
 ```
 
 ### 4. Analyze Specific Code Sections
@@ -149,7 +166,7 @@ Issues are categorized into:
 | `create-project` | Create new project | `PROJECT_NAME` |
 | `configure` | Set up API keys | - |
 | `assist` | Start code review | `--watch`, `--set-project-path` |
-| `ask` | Query the codebase | `--interactive`, `--composer`, `--chunks` |
+| `ask` | Query the codebase | `--interactive`, `--composer`, `--chunks`, `--concise` |
 | `explain` | Explain code sections | `--start-line`, `--end-line`, `--detail` |
 | `suggest` | Get inline suggestions | `--line`, `--scope`, `--threshold` |
 | `complete` | Get code completions | `--line`, `--scope`, `--patterns` |
@@ -173,6 +190,30 @@ TOGETHER_API_KEY=your_api_key_here
 2. Project configuration (`~/.codeai/config.yml`):
 ```yaml
 project_path: /path/to/your/project
+```
+
+3. Response verbosity settings (in `config.yml`):
+```yaml
+# Set concise mode globally
+response_mode: concise
+
+# Or with more detailed settings
+model:
+  concise_responses: true
+  max_tokens: 150
+  verbosity: low
+```
+
+## 🧪 Testing
+
+Test the different features with the provided scripts:
+
+```bash
+# Test concise mode
+python test_concise.py --run
+
+# Test advanced code retrieval
+python test_retrieval.py --run
 ```
 
 ## 🤝 Contributing
