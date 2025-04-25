@@ -233,30 +233,16 @@ def init(source: str, github: bool, project: str = None, summary: bool = False, 
 @click.option('--reset', '-r', is_flag=True, help='Reset conversation history before starting')
 @click.option('--project', '-p', help='Project to use')
 @click.option('--concise', is_flag=True, help='Force concise responses (1-2 sentences)')
-def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bool = False, project: str = None, concise: bool = False):
-    """Ask questions about the codebase.
-    
-    This command allows you to ask questions about your codebase and get intelligent answers.
-    You can use it in interactive mode to have a conversation with the AI.
-    
-    Examples:
-    
-    # Ask a single question
-    python cli.py ask "How does the authentication system work?"
-    
-    # Start an interactive session
-    python cli.py ask -i
-    
-    # Get concise answers (1-2 sentences)
-    python cli.py ask --concise "What does the process_file function do?"
+@click.option('--model', '-m', help='Specific model to use for this session')
+def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bool = False, project: str = None, concise: bool = False, model: str = None):
+    """Ask a question about the codebase.
+
+    This command allows you to ask questions about your indexed codebase
+    and get insightful answers based on semantic understanding of your code.
+
+    Use interactive mode (-i) to maintain a conversation with the assistant.
     """
     try:
-        # Change to specified project if requested
-        if project:
-            create_project_cmd = get_command('create_project')
-            ctx = click.Context(create_project_cmd, info_name='create_project')
-            create_project_cmd.invoke(ctx, project_name=project)
-        
         console.print("[bold blue]Loading code analyzer...[/]")
         analyzer = load_analyzer_state(project)
         
@@ -281,7 +267,8 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
                         # Get response in composer mode
                         response = await analyzer.query(
                             f"Act as a code composer. For the following request, show the exact changes needed using + for additions and - for removals: {question}",
-                            chunks
+                            chunks,
+                            model=model
                         )
                         
                         # Process response to highlight diffs
@@ -364,9 +351,9 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
                         if concise:
                             # Add explicit concise instruction to question
                             question_with_instruction = f"Answer in 1-2 short sentences only: {question}"
-                            response = await analyzer.query(question_with_instruction, chunks)
+                            response = await analyzer.query(question_with_instruction, chunks, model=model)
                         else:
-                            response = await analyzer.query(question, chunks)
+                            response = await analyzer.query(question, chunks, model=model)
                 
                 print(f"\n{response}\n")
                 
@@ -381,6 +368,8 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
             console.print("[bold yellow]Interactive mode (Ctrl+C to exit)[/]")
             if composer:
                 console.print("[bold yellow]Composer mode enabled - showing changes as diffs[/]")
+            if model:
+                console.print(f"[bold cyan]Using model: {model}[/]")
             console.print("[dim]Conversation history is maintained between questions[/]\n")
             try:
                 while True:
@@ -428,6 +417,24 @@ def load_analyzer_state(project_name: str = None):
     # Get API key
     api_key = setup_together_api()
     
+    # If no project name is provided, try to get the active project
+    if not project_name:
+        try:
+            registry_file = Path(".codeai") / "registry.pkl"
+            if registry_file.exists():
+                with open(registry_file, 'rb') as f:
+                    projects = pickle.load(f)
+                    project_name = projects.get('active')
+                    console.print(f"[green]Using active project: {project_name}[/]")
+        except Exception as e:
+            console.print(f"[yellow]Could not determine active project: {str(e)}[/]")
+    
+    # If we still don't have a project name, it's an error
+    if not project_name:
+        console.print("[yellow]No project specified and no active project found.[/]")
+        console.print("[yellow]Please create a project with 'python cli.py create-project YOUR_PROJECT_NAME'[/]")
+        exit(1)
+    
     # Create analyzer with saved state
     analyzer = CodebaseAnalyzer(".", api_key, project_name)  # Path doesn't matter for loading
     
@@ -435,7 +442,7 @@ def load_analyzer_state(project_name: str = None):
         analyzer.load_state()
         return analyzer
     except FileNotFoundError:
-        console.print("[yellow]No saved state found. Please index a codebase first using 'python cli.py init'[/]")
+        console.print(f"[yellow]No saved state found for project '{project_name}'. Please index a codebase first using 'python cli.py init'[/]")
         exit(1)
     except Exception as e:
         console.print(f"[bold red]Error loading analyzer state: {str(e)}[/]")
@@ -1273,6 +1280,150 @@ def project_name():
         console.print(f"[bold red]Error getting project name: {str(e)}[/]")
         if os.getenv("DEBUG"):
             traceback.print_exc()
+
+@cli.command()
+@click.argument('model_name', required=False)
+@click.option('--list', '-l', is_flag=True, help='List available models')
+def set_model(model_name: str = None, list: bool = False):
+    """Set the default model for code analysis.
+
+    This command allows you to set the default language model to use for code analysis.
+    If no model is specified, it shows the current default model.
+
+    Examples:
+        codeai set-model meta-llama/Llama-3.3-70B-Instruct-Turbo
+        codeai set-model --list
+
+    Available models include:
+    - meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8  
+    - meta-llama/Llama-4-Scout-17B-16E-Instruct
+    - meta-llama/Llama-3.3-70B-Instruct-Turbo
+    - meta-llama/Llama-3.3-70B-Instruct-Turbo-Free
+    - meta-llama/Llama-3.2-3B-Instruct-Turbo
+    - deepseek-ai/DeepSeek-R1
+    - deepseek-ai/DeepSeek-V3
+    - deepseek-ai/deepseek-llm-67b-chat
+    - google/gemma-3-27b-it
+    - google/gemma-3-12b-it
+    - mistralai/Mistral-Small-24B-Instruct-2501
+    - mistralai/Mixtral-8x7B-Instruct-v0.1
+    And many others. Use --list to see all available models.
+    """
+    try:
+        # Define model categories for neat display
+        model_categories = {
+            "Meta LLaMA Series": [
+                "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+                "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+                "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+                "meta-llama/Llama-3.2-3B-Instruct-Turbo",
+                "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+                "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+            ],
+            "DeepSeek AI Series": [
+                "deepseek-ai/DeepSeek-R1",
+                "deepseek-ai/DeepSeek-V3",
+                "deepseek-ai/deepseek-llm-67b-chat",
+                "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+                "deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-14",
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+            ],
+            "DeepCogito Series": [
+                "deepcogito/cogito-v1-preview-llama-70B",
+                "deepcogito/cogito-v1-preview-llama-8B",
+                "deepcogito/cogito-v1-preview-llama-3B",
+                "deepcogito/cogito-v1-preview-qwen-32B",
+                "deepcogito/cogito-v1-preview-qwen-14B",
+            ],
+            "Google Gemma": [
+                "google/gemma-3-27b-it",
+                "google/gemma-3-12b-it",
+                "google/gemma-3-1b-it",
+                "google/gemma-2-27b-it",
+                "google/gemma-2-9b-it",
+                "google/gemma-2b-it",
+            ],
+            "Arcee AI": [
+                "arcee-ai/virtuoso-large",
+                "arcee-ai/virtuoso-medium",
+                "arcee-ai/maestro-reasoning",
+                "arcee-ai/coder-large",
+                "arcee-ai/caller",
+                "arcee-ai/arcee-blitz",
+            ],
+            "Qwen": [
+                "Qwen/QwQ-32B",
+                "Qwen/Qwen2.5-72B-Instruct-Turbo",
+                "Qwen/Qwen2.5-7B-Instruct-Turbo",
+                "Qwen/Qwen2.5-Coder-32B-Instruct",
+            ],
+            "Mistral AI": [
+                "mistralai/Mistral-Small-24B-Instruct-2501",
+                "mistralai/Mistral-7B-Instruct-v0.1",
+                "mistralai/Mistral-7B-Instruct-v0.2",
+                "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            ],
+            "NVIDIA": [
+                "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
+            ],
+            "Databricks": [
+                "databricks/dbrx-instruct",
+            ]
+        }
+        
+        # Flatten the model list for checking
+        all_models = [model for category in model_categories.values() for model in category]
+        
+        if list:
+            # Show all available models in categories
+            console.print("[bold blue]Available Models:[/]")
+            for category, models in model_categories.items():
+                console.print(f"\n[bold cyan]{category}[/]")
+                for model in models:
+                    console.print(f"  • {model}")
+            return
+        
+        # Load config
+        config_path = Path('config.yml')
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+        else:
+            config = {}
+            
+        # Initialize model section if it doesn't exist
+        if 'model' not in config:
+            config['model'] = {}
+            
+        # Show current model if no new model specified
+        if not model_name:
+            current_model = config.get('model', {}).get('default', "meta-llama/Llama-3.3-70B-Instruct-Turbo")
+            console.print(f"[bold blue]Current default model:[/] {current_model}")
+            console.print("\nUse 'set-model --list' to see all available models.")
+            return
+            
+        # Check if valid model
+        if model_name not in all_models:
+            console.print(f"[bold red]Warning:[/] '{model_name}' is not in the list of common models.")
+            if not Confirm.ask("[bold yellow]Continue with this model anyway?[/]"):
+                console.print("[yellow]Model change cancelled.[/]")
+                return
+            
+        # Update config
+        config['model']['default'] = model_name
+        
+        # Save config
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False)
+            
+        console.print(f"[bold green]✓ Default model updated to:[/] {model_name}")
+        
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+        traceback.print_exc()
+        exit(1)
 
 if __name__ == '__main__':
     cli()

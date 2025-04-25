@@ -1,4 +1,6 @@
 chunk_size: 20
+chunk_batch_size: 100
+embedding_batch_size: 64
 debug: false
 distributed:
   batch_size: 50
@@ -11,11 +13,14 @@ generate_summary: false
 max_history: 5
 model:
   concise_responses: true
-  max_tokens: 150
+  max_tokens: 2000
   verbosity: low
+  smart_concise: true
+  default: meta-llama/Llama-3.3-70B-Instruct-Turbo
 overlap: 5
 parallel:
   batch_size: 10
-  max_workers: null
+  max_workers: 8
 response_mode: concise
 temperature: 0.5
+use_memory_efficient_embeddings: true

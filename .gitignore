@@ -23,6 +23,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Cache
+.cache/
+
 # Virtual Environment
 venv/
 env/
@@ -39,6 +42,8 @@ ENV/
 
 # Test files
 test_files/
+codeai_cache/
+repositories/
 
 # documentation
 docs/

@@ -196,9 +196,18 @@ class ParallelProcessor:
     def _stream_results_to_disk(self, embeddings, documents, metadata, batch_index: int) -> str:
         """Save batch results to disk and return the file path"""
         batch_filename = f"{self.cache_dir}/batch_{batch_index}.json"
+        
+        # Convert NumPy arrays to Python lists for JSON serialization
+        serializable_embeddings = []
+        for embedding in embeddings:
+            if hasattr(embedding, 'tolist'):  # Check if it's a NumPy array
+                serializable_embeddings.append(embedding.tolist())
+            else:
+                serializable_embeddings.append(embedding)
+                
         with open(batch_filename, 'w', encoding='utf-8') as f:
             json.dump({
-                'embeddings': embeddings,
+                'embeddings': serializable_embeddings,
                 'documents': documents,
                 'metadata': metadata
             }, f)
@@ -242,8 +251,30 @@ class ParallelProcessor:
             task_process = None
             task_embed = None
             if progress:
-                task_process = progress.add_task("[green]Processing files...", total=len(files))
-                task_embed = progress.add_task("[yellow]Waiting for files to process...", total=len(files))
+                # Check if tasks already exist in progress object
+                # This avoids creating duplicate progress bars
+                existing_tasks = getattr(progress, "_tasks", {})
+                task_ids = [task_id for task_id in existing_tasks 
+                           if getattr(existing_tasks[task_id], "description", "").startswith("[green]Processing file")]
+                
+                if task_ids and len(task_ids) > 0:
+                    task_process = task_ids[0]
+                    # Update existing task with new total
+                    progress.update(task_process, total=len(files), completed=0)
+                else:
+                    task_process = progress.add_task("[green]Processing files...", total=len(files))
+                
+                # Similarly for embedding task
+                task_ids = [task_id for task_id in existing_tasks 
+                           if getattr(existing_tasks[task_id], "description", "").startswith("[yellow]")]
+                
+                if task_ids and len(task_ids) > 0:
+                    task_embed = task_ids[0]
+                    # Update existing task with new total
+                    progress.update(task_embed, total=len(files), completed=0, 
+                                   description="[yellow]Waiting for files to process...")
+                else:
+                    task_embed = progress.add_task("[yellow]Waiting for files to process...", total=len(files))
             
             # Process files in parallel using process pool
             loop = asyncio.get_event_loop()
@@ -283,7 +314,7 @@ class ParallelProcessor:
                         current_file_name = Path(current_file).name
                         
                         if progress and task_process:
-                            progress.update(task_process, description=f"[green]Processing file: {current_file_name}")
+                            progress.update(task_process, description=f"Processing file: {current_file_name}")
                         
                         chunks = await future
                         if chunks:
@@ -291,7 +322,7 @@ class ParallelProcessor:
                                 file_path=current_file,
                                 chunks=chunks
                             ))
-                            console.print(f"[dim]Processed {current_file_name} - {len(chunks)} chunks[/]")
+                            console.print(f"Processed {current_file_name} - {len(chunks)} chunks")
                         if progress and task_process:
                             progress.update(task_process, advance=1)
                     except Exception as e:
@@ -327,11 +358,10 @@ class ParallelProcessor:
                             current_files += f" (+{len(batch_files)-3} more)"
                         
                         if progress and task_embed:
-                            progress.update(task_embed, description=f"[yellow]Generating embeddings for: {current_files}")
+                            progress.update(task_embed, description=f"Generating embeddings for: {current_files}")
                         
                         # Generate embeddings for the batch
                         try:
-                            console.print(f"[dim]Embedding batch of {len(batch_texts)} chunks from {len(batch_files)} files[/]")
                             batch_embeddings = await embedding_client.get_embeddings(batch_texts)
                             
                             # Prepare batch data

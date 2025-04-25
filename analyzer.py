@@ -27,6 +27,13 @@ from rich.console import Group
 import datetime
 from collections import defaultdict
 from parallel_processor import ParallelProcessor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
+import tempfile
+import json
+import gc
+from pathlib import Path
+from typing import List, Dict, Optional, Tuple, Any, Set, Iterator
 
 console = Console()
 
@@ -362,256 +369,266 @@ class SemanticChunk:
         self.importance_score = score
 
 class CodebaseAnalyzer:
+    """Analyzer for codebases with semantic understanding."""
+    
     def __init__(self, path: str, together_api_key: str, project_name: str = None):
+        """Initialize the code analyzer with a path to the codebase.
+        
+        Args:
+            path (str): Path to the directory containing the codebase.
+            together_api_key (str): API key for Together AI API.
+            project_name (str, optional): Project name for organization. Defaults to None.
+        """
+        # Validate codebase path
         self.path = Path(path)
-        self.ai_client = TogetherAIClient(together_api_key)
+        if not self.path.exists():
+            raise ValueError(f"Path does not exist: {path}")
+        
+        # Initialize Together AI client
+        self.together_client = TogetherAIClient(together_api_key)
+        self.ai_client = self.together_client  # Create ai_client alias for compatibility
+        self.project_name = project_name or self.path.name
+        self.cache_dir = Path(f"codeai_cache/{self.project_name}")
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize FAISS index
         self.faiss_index = None
         self.documents = []
         self.metadata = []
         self.conversation_history = []
-        self.parallel_processor = ParallelProcessor()  # Add parallel processor
+        self.config = {'chunk_size': 20, 'overlap': 5, 'max_history': 5}
+        self._load_config()
+        self.embedding_cache = DiskEmbeddingCache(cache_dir=self.cache_dir)
         
-        # Initialize Rich console with markdown support and force color
-        self.console = Console(force_terminal=True, color_system="truecolor")
+        # Initialize parallel processor
+        self.parallel_processor = ParallelProcessor()
         
-        # Initialize config with defaults
-        self.config = {
-            "chunk_size": 20,
-            "overlap": 5,
-            "max_history": 5,
-            "temperature": 0.7,
-            "debug": False,
-            "generate_summary": False
-        }
+        # Initialize indexing variables
+        self.total_files = 0
+        self.processed_files = 0
+        self.token_count = 0
+        self.indexed_at = None
+        self.codebase_summary = None
+        self.file_summaries = {}
+        self.console = Console()
         
-        # Create data directory if it doesn't exist
-        self.data_dir = Path(".codeai")
-        self.data_dir.mkdir(exist_ok=True)
-        
-        # Set up project-specific data directory
-        if project_name:
-            self.project_name = project_name
-            self.project_dir = self.data_dir / "projects" / project_name
-            self.project_dir.mkdir(exist_ok=True, parents=True)
-        else:
-            # Try to get active project from registry
-            registry_file = self.data_dir / "registry.pkl"
-            if registry_file.exists():
-                with open(registry_file, 'rb') as f:
-                    projects = pickle.load(f)
-                    active = projects.get('active', None)
-                    if active:
-                        self.project_name = active
-                        self.project_dir = self.data_dir / "projects" / active
-                        self.project_dir.mkdir(exist_ok=True, parents=True)
-                    else:
-                        self.project_name = "default"
-                        self.project_dir = self.data_dir
-            else:
-                self.project_name = "default"
-                self.project_dir = self.data_dir
-                
-        # Load project config if it exists
-        config_file = self.project_dir / "config.yml"
-        if config_file.exists():
-            try:
-                with open(config_file) as f:
-                    project_config = yaml.safe_load(f)
-                    if isinstance(project_config, dict):
-                        self.config.update(project_config)
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not load project config: {str(e)}[/]")
-        
-        # Create a layout for better organization
-        self.layout = Layout()
-        self.layout.split_column(
-            Layout(name="header"),
-            Layout(name="main", ratio=8),
-            Layout(name="footer")
-        )
-    
     @classmethod
-    async def from_github(cls, github_url: str, api_key: str, project_name: str = None):
-        """Create analyzer from GitHub repository asynchronously"""
-        console.print(f"[bold blue]Cloning GitHub repository:[/] {github_url}")
+    async def from_github(cls, github_url: str, together_api_key: str, project_name: str = None):
+        """Initialize the code analyzer with a GitHub repository URL.
         
-        # Use project directory if specified
-        if project_name:
-            data_dir = Path(".codeai") / "projects" / project_name
-        else:
-            data_dir = Path(".codeai")
+        Args:
+            github_url (str): URL of the GitHub repository.
+            together_api_key (str): API key for Together AI API.
+            project_name (str, optional): Project name for organization. Defaults to None.
+            
+        Returns:
+            CodebaseAnalyzer: An initialized CodebaseAnalyzer instance.
+        """
+        console = Console()
+        with console.status(f"[bold green]Cloning repository from {github_url}...[/]"):
+            # Extract project name from URL if not provided
+            if not project_name:
+                project_name = github_url.rstrip('/').split('/')[-1]
+                if project_name.endswith('.git'):
+                    project_name = project_name[:-4]
+            
+            # Create temporary directory for cloning
+            repo_path = Path(f"repositories/{project_name}")
+            repo_path.mkdir(parents=True, exist_ok=True)
+            
+            # Clone the repository
+            try:
+                if repo_path.exists() and any(repo_path.iterdir()):
+                    # Repository already exists, just pull latest changes
+                    console.print(f"[yellow]Repository already exists at {repo_path}, pulling latest changes...[/]")
+                    repo = Repo(repo_path)
+                    origin = repo.remotes.origin
+                    origin.pull()
+                else:
+                    # Clone new repository
+                    Repo.clone_from(github_url, repo_path)
+                console.print(f"[green]Repository cloned successfully to {repo_path}[/]")
+            except Exception as e:
+                console.print(f"[bold red]Error cloning repository: {str(e)}[/]")
+                raise
         
-        data_dir.mkdir(exist_ok=True, parents=True)
+        # Initialize analyzer with the cloned repository
+        return cls(str(repo_path), together_api_key, project_name)
         
-        # Clone to a temporary directory
-        repo_name = github_url.split('/')[-1]
-        clone_path = data_dir / "repos" / repo_name
-        clone_path.parent.mkdir(exist_ok=True)
-        
-        try:
-            if not clone_path.exists():
-                # Create a new instance of the analyzer
-                analyzer = cls(str(clone_path), api_key, project_name)
-                
-                # Clone the repository synchronously (git operations are not async)
-                console.print(f"[blue]Cloning to:[/] {clone_path}")
-                with console.status("[bold green]Cloning repository..."):
-                    Repo.clone_from(github_url, clone_path)
-                
-                # Check if the clone worked
-                files = list(clone_path.glob("*"))
-                console.print(f"[green]Clone successful. Found {len(files)} items in repository.[/]")
-                if files:
-                    console.print(f"[dim]Top-level items:[/] {', '.join([f.name for f in files[:5]])}{' ...' if len(files) > 5 else ''}")
-                
-                return analyzer
-            else:
-                # If already cloned, check the directory content
-                files = list(clone_path.glob("*"))
-                console.print(f"[yellow]Repository already exists at {clone_path}[/]")
-                console.print(f"[green]Found {len(files)} items in repository.[/]")
-                if files:
-                    console.print(f"[dim]Top-level items:[/] {', '.join([f.name for f in files[:5]])}{' ...' if len(files) > 5 else ''}")
-                
-                # If already cloned, just return the analyzer
-                return cls(str(clone_path), api_key, project_name)
-        except Exception as e:
-            console.print(f"[bold red]Error cloning repository:[/] {str(e)}")
-            traceback.print_exc()
-            raise
-    
     async def index(self):
-        """Index the codebase using parallel processing."""
+        """Index the codebase for analysis.
+        
+        This method indexes all files in the codebase and creates an embedding for each chunk.
+        It also generates a summary of the codebase if configured.
+        
+        Returns:
+            None
+        """
         try:
-            with Progress() as progress:
-                # Find all files
-                task_find = progress.add_task("[blue]Finding files...", total=1)
-                console.print("[blue]Starting indexing process...[/]")
-                
-                all_files = []
-                for root, _, files in os.walk(self.path):
-                    for file in files:
-                        all_files.append(Path(root) / file)
-                        
-                progress.update(task_find, advance=1)
-                console.print(f"Found {len(all_files)} files in total")
-                
-                # Show sample of files found
-                if all_files:
-                    sample_files = all_files[:5]
-                    console.print("Sample files:", ", ".join(str(f) for f in sample_files), "...")
-                
-                # Filter indexable files
-                task_filter = progress.add_task("[blue]Filtering indexable files...", total=1)
-                
-                indexable_files = []
-                file_extensions = {}
-                
-                for file in all_files:
-                    file_path = str(file)
-                    
-                    # Skip hidden files and directories, but allow .codeai/repos
-                    parts = Path(file_path).parts
-                    if any(part.startswith('.') and part != '.codeai' and not (part == '.git' and 'repos' in parts) for part in parts):
-                        console.print(f"Skipping {file_path}: hidden directory or file")
-                        continue
-                    
-                    # Skip .git directory contents
-                    if '.git' in parts and 'repos' not in parts:
-                        console.print(f"Skipping {file_path}: git directory")
-                        continue
-                        
-                    # Get file extension
-                    ext = file.suffix.lower()
-                    
-                    # Track extension counts
-                    if ext:
-                        file_extensions[ext] = file_extensions.get(ext, 0) + 1
-                    
-                    # Include files with supported extensions
-                    if ext in ['.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.cs', '.go', '.rs', '.md', '.txt']:
-                        console.print(f"Including file: {file_path} with extension {ext}")
-                        indexable_files.append(file)
-                
-                progress.update(task_filter, advance=1)
-                
-                # Print extension breakdown
-                console.print(f"\nFound {len(indexable_files)} indexable files")
-                if file_extensions:
-                    console.print("Extension breakdown:")
-                    for ext, count in sorted(file_extensions.items(), key=lambda x: x[1], reverse=True):
-                        console.print(f"  {ext}: {count} files")
-                
-                # Additional debugging for file paths
-                if not indexable_files:
-                    console.print("[yellow]All files were filtered out. Checking file paths:[/]")
-                    all_paths = set()
-                    for file in all_files:
-                        file_path = str(file)
-                        parts = file_path.split(os.sep)
-                        for part in parts:
-                            all_paths.add(part)
-                    console.print(f"[dim]Unique path components: {sorted(all_paths)}[/]")
-                    
-                    console.print("[bold red]Error: No indexable files found in the repository[/]")
-                    raise ValueError("No indexable files found in the repository")
-                
-                # Process files in parallel and generate embeddings
-                all_embeddings, all_documents, all_metadata = await self.parallel_processor.process_files_parallel(
-                    files=indexable_files,
+            console = Console()
+            console.print("[blue]Starting full indexing of the codebase...[/]")
+            
+            # Initialize document storage
+            self.documents = []
+            self.metadata = []
+            
+            # Find all indexable files
+            all_files = list(self._get_indexable_files())
+            console.print(f"[blue]Found {len(all_files)} indexable files[/]")
+            
+            # Process files and generate embeddings
+            from rich.progress import Progress
+            progress = Progress()
+            with progress:
+                file_embeddings, file_documents, file_metadata = await self.parallel_processor.process_files_parallel(
+                    files=all_files,
                     chunk_size=self.config.get('chunk_size', 20),
                     embedding_client=self.ai_client,
                     batch_size=self.config.get('parallel', {}).get('batch_size', 10),
                     progress=progress
                 )
+            
+            if file_embeddings:
+                # Determine the dimension from the first embedding
+                if hasattr(file_embeddings[0], 'shape'):
+                    dimension = file_embeddings[0].shape[0]  # NumPy array
+                elif isinstance(file_embeddings[0], list):
+                    dimension = len(file_embeddings[0])  # Python list
+                else:
+                    dimension = 1024  # Default fallback
                 
-                if not all_embeddings:
-                    console.print("[bold red]Error: No embeddings were generated. Check file processing.[/]")
-                    raise ValueError("No embeddings were generated. Check file processing.")
+                # Initialize FAISS index with the correct dimension
+                console.print(f"[blue]Creating FAISS index with dimension {dimension}[/]")
+                self.faiss_index = faiss.IndexFlatL2(dimension)
                 
-                # Create FAISS index
-                task_index = progress.add_task("[blue]Creating FAISS index...", total=1)
-                console.print(f"[blue]Creating FAISS index with {len(all_embeddings)} embeddings[/]")
+                # Add embeddings to FAISS index
+                embeddings_array = np.array(file_embeddings).astype('float32')
+                self.faiss_index.add(embeddings_array)
                 
-                try:
-                    dimension = len(all_embeddings[0])
-                    self.faiss_index = faiss.IndexFlatL2(dimension)
-                    embeddings_array = np.array(all_embeddings).astype('float32')
-                    self.faiss_index.add(embeddings_array)
-                    
-                    # Store documents and metadata
-                    self.documents = all_documents
-                    self.metadata = all_metadata
-                    
-                    progress.update(task_index, advance=1)
-                    
-                    # Generate codebase summary only if requested in config
-                    if self.config.get('generate_summary', False):
-                        task_summary = progress.add_task("[blue]Generating codebase summary...", total=1)
-                        console.print("[blue]Generating high-level codebase summary...[/]")
-                        await self._generate_codebase_summary(indexable_files)
-                        progress.update(task_summary, advance=1)
-                    else:
-                        # Just create a minimal summary
-                        self.codebase_summary = f"# Codebase Summary\n\nTotal files: {len(indexable_files)}\nFile types: {', '.join(f'{ext} ({count})' for ext, count in sorted(file_extensions.items(), key=lambda x: x[1], reverse=True))}"
-                    
-                    # Save state
-                    task_save = progress.add_task("[blue]Saving state...", total=1)
-                    console.print("[blue]Saving state...[/]")
-                    self.save_state()
-                    progress.update(task_save, advance=1)
-                    
-                    console.print(f"[bold green]Indexing complete! Processed {len(all_documents)} chunks from {len(indexable_files)} files.[/]")
-                except Exception as e:
-                    console.print(f"[bold red]Error creating FAISS index: {str(e)}[/]")
-                    traceback.print_exc()
-                    raise
+                # Store documents and metadata
+                self.documents.extend(file_documents)
+                self.metadata.extend(file_metadata)
                 
+                console.print(f"[green]Indexed {len(file_embeddings)} chunks from {len(all_files)} files[/]")
+            else:
+                console.print("[yellow]Warning: No embeddings were generated during indexing.[/]")
+                # Create an empty index anyway to avoid NoneType errors
+                self.faiss_index = faiss.IndexFlatL2(1536)  # Use 1536 as default for modern embedding models
+            
+            # Generate codebase summary if configured
+            if self.config.get('generate_summary', False):
+                await self._generate_codebase_summary(all_files)
+            else:
+                # Create a minimal summary
+                file_extensions = {}
+                for file_path in all_files:
+                    ext = file_path.suffix.lower()
+                    if ext:
+                        file_extensions[ext] = file_extensions.get(ext, 0) + 1
+                
+                self.codebase_summary = f"# Codebase Summary\n\nTotal files: {len(all_files)}\nFile types: {', '.join(f'{ext} ({count})' for ext, count in sorted(file_extensions.items(), key=lambda x: x[1], reverse=True))}"
+            
+            # Save state
+            self.save_state()
+            
+            console.print("[bold green]Indexing complete![/]")
+            
         except Exception as e:
-            console.print(f"[bold red]Indexing failed: {str(e)}[/]")
+            console.print(f"[bold red]Error during indexing: {str(e)}[/]")
             traceback.print_exc()
             raise
-    
+
+    def _get_indexable_files(self) -> Iterator[Path]:
+        """Get all indexable files in the codebase.
+        
+        Returns:
+            Iterator of Path objects for indexable files
+        """
+        for root, _, files in os.walk(self.path):
+            for file in files:
+                file_path = Path(root) / file
+                
+                # Skip hidden files and directories, but allow .codeai/repos
+                parts = file_path.parts
+                if any(part.startswith('.') and part != '.codeai' and not (part == '.git' and 'repos' in parts) for part in parts):
+                    continue
+                
+                # Skip .git directory contents unless in repos
+                if '.git' in parts and 'repos' not in parts:
+                    continue
+                    
+                # Skip if not an indexable file
+                if not self._should_index_file(file_path):
+                    continue
+                    
+                yield file_path
+
+    def _load_config(self):
+        """Load configuration from project directory."""
+        config_file = self.cache_dir / "config.yml"
+        if config_file.exists():
+            try:
+                with open(config_file) as f:
+                    return yaml.safe_load(f)
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not load config: {str(e)}[/]")
+        return {}
+
+    def _should_index_file(self, file_path: Path) -> bool:
+        """Determine if file should be indexed"""
+        # First, make the path relative to the repository root to avoid .codeai issues
+        try:
+            rel_path = file_path.relative_to(self.path)
+            parts = rel_path.parts
+        except ValueError:
+            # If we can't get a relative path, use the original parts
+            parts = file_path.parts
+        
+        file_extension = file_path.suffix.lower()
+        
+        # Skip hidden directories (but allow .codeai/repos and .git in repos)
+        if any(part.startswith('.') and part != '.codeai' and not (part == '.git' and 'repos' in parts) for part in parts):
+            console.print(f"[dim]Skipping {rel_path}: hidden directory or file[/]")
+            return False
+            
+        # Skip .git directory contents unless in repos
+        if '.git' in parts and 'repos' not in parts:
+            console.print(f"[dim]Skipping {rel_path}: git directory[/]")
+            return False
+        
+        IGNORE_DIRS = {'node_modules', 'venv', 'env', 'build', 'dist', '__pycache__'}
+        if any(part in IGNORE_DIRS for part in parts):
+            console.print(f"[dim]Skipping {rel_path}: in ignored directory[/]")
+            return False
+        
+        if file_extension == '':
+            console.print(f"[dim]Skipping {rel_path}: no file extension[/]")
+            return False
+            
+        # Include common code file extensions, especially frontend-related ones
+        CODE_EXTENSIONS = {
+            '.py', '.js', '.ts', '.jsx', '.tsx',         # Python, JavaScript, TypeScript
+            '.java', '.cpp', '.c', '.h', '.hpp', '.cs',   # Java, C++, C#
+            '.go', '.rs',                                 # Go, Rust
+            '.html', '.css', '.scss', '.sass',            # Web files
+            '.vue', '.svelte',                            # Vue, Svelte
+            '.json', '.xml', '.yaml', '.yml',             # Data files
+            '.md', '.markdown',                           # Documentation
+            '.cjs', '.mjs', '.ejs',                       # Other JS variants
+            '.mts', '.cts',                               # TypeScript variants
+            '.gitignore', '.env', '.eslintrc'             # Config files
+        }
+        
+        is_indexable = file_extension in CODE_EXTENSIONS
+        
+        # Debug output for every file
+        if is_indexable:
+            console.print(f"[green]Including file: {rel_path} with extension {file_extension}[/]")
+        else:
+            console.print(f"[yellow]Skipping file: {rel_path} with extension '{file_extension}'[/]")
+        
+        return is_indexable
+
     def _create_header(self, title: str) -> Panel:
         """Create a styled header panel"""
         from rich.text import Text
@@ -646,14 +663,32 @@ class CodebaseAnalyzer:
     def _format_output(self, text: str, title: str = "Code Analysis Report"):
         """Format text using a simple, conversational style"""
         try:
-            # Simply print the text without any fancy formatting
+            # For longer responses, split the text into chunks to avoid console truncation
+            max_chunk_size = 8000  # Adjust this value as needed
+            
+            if len(text) > max_chunk_size:
+                # Split the text into reasonable chunks
+                chunks = [text[i:i+max_chunk_size] for i in range(0, len(text), max_chunk_size)]
+                
+                # Print the first chunk with a header
+                self.console.print(f"\n{title}\n{'=' * len(title)}")
+                self.console.print(chunks[0])
+                
+                # Print remaining chunks with continuation markers
+                for i, chunk in enumerate(chunks[1:], 1):
+                    self.console.print(f"\n(Continued part {i+1} of {len(chunks)}...)\n")
+                    self.console.print(chunk)
+            else:
+                # For shorter responses, just print with a simple header
+                self.console.print(f"\n{title}\n{'=' * len(title)}")
             self.console.print(text)
+                
         except Exception as e:
             self.console.print(f"[bold red]Error formatting output:[/] {str(e)}")
             # Fallback to simple printing
             self.console.print(text)
 
-    async def query(self, question: str, chunk_count: int = None) -> str:
+    async def query(self, question: str, chunk_count: int = None, model: str = None) -> str:
         """Query the codebase with enhanced semantic understanding and code-aware retrieval."""
         try:
             # Analyze query for code-specific elements and intent
@@ -738,22 +773,23 @@ class CodebaseAnalyzer:
                     
                     # Save the file content in the query context for follow-up questions
                     query_context['file_content'] = file_content
-                    
+                
                     # Generate response with direct file context
                     history_context = ""
                     if self.conversation_history:
                         history_context = self._prepare_filtered_history(question, query_context)
-                    
+                
                     response = await self._generate_direct_file_response(
                         question,
                         direct_file_context,
                         history_context,
-                        query_context
+                        query_context,
+                        model=model
                     )
-                    
+                
                     # Update conversation history
                     self._update_conversation_history(question, response, query_context)
-                    
+                
                     return response
                 else:
                     console.print(f"[yellow]File not found directly: {target_file_name}, continuing with semantic search[/]")
@@ -820,7 +856,6 @@ class CodebaseAnalyzer:
                 self._update_conversation_history(question, response, query_context)
                 
                 return response
-                    
             # Determine optimal number of chunks based on query complexity if not specified
             if chunk_count is None:
                 chunk_count = self._determine_optimal_chunk_count(question, query_context)
@@ -970,11 +1005,12 @@ class CodebaseAnalyzer:
         return "\n".join(context_parts)
 
     async def _generate_direct_file_response(self, question: str, file_context: str,
-                                          history_context: str, query_context: Dict) -> str:
-        """Generate response for direct file queries with complete file content."""
+                                      history_context: str, query_context: Dict, model: str = None) -> str:
+        """Generate response focused on a specific file."""
         # Check for concise mode
         config_path = Path('config.yml')
         use_concise = False
+        smart_concise = False
         if config_path.exists():
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
@@ -984,6 +1020,14 @@ class CodebaseAnalyzer:
                     config.get('model', {}).get('concise_responses', False) or
                     config.get('model', {}).get('verbosity') == 'low'
                 )
+                
+                # Check for smart concise mode
+                smart_concise = config.get('model', {}).get('smart_concise', False)
+        
+        # Override concise mode if detailed response is specifically needed OR smart concise is enabled
+        if query_context.get('needs_detailed_response', False) and (smart_concise or use_concise):
+            use_concise = False
+            console.print("[blue]Using detailed response mode based on query analysis[/]")
                 
         # Build prompt based on verbosity mode
         if use_concise:
@@ -1026,7 +1070,7 @@ class CodebaseAnalyzer:
             # Original verbose prompt
             prompt_parts = [
                 "You are a friendly and helpful AI assistant analyzing code. Explain things in a natural, conversational way.",
-                "You're looking at a specific file that the user asked about.",
+                "You're looking at a specific file that the user asked about.", 
                 f"The file is: {query_context.get('target_file')}",
                 "Please be thorough but explain things like you're having a casual conversation with a fellow developer.",
                 "In your response, try to:"
@@ -1088,7 +1132,8 @@ class CodebaseAnalyzer:
             enhanced_prompt,
             temperature=self.config.get('temperature', 0.7),
             max_tokens=4000 if not use_concise else 250,  # Smaller token count for concise mode
-            concise=use_concise  # Pass concise flag to the AI client
+            concise=use_concise,  # Pass concise flag to the AI client
+            model=model  # Pass the model parameter
         )
         
         # Only check for short responses in verbose mode
@@ -1106,7 +1151,8 @@ class CodebaseAnalyzer:
             response = await self.ai_client.get_completion(
                 enhanced_prompt,
                 temperature=self.config.get('temperature', 0.8),  # Slightly higher temperature
-                max_tokens=4000
+                max_tokens=4000,
+                model=model  # Pass the model parameter
             )
         
         # Format the response for display
@@ -1390,6 +1436,7 @@ class CodebaseAnalyzer:
         # Check for concise mode
         config_path = Path('config.yml')
         use_concise = False
+        smart_concise = False
         if config_path.exists():
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
@@ -1400,123 +1447,90 @@ class CodebaseAnalyzer:
                     config.get('model', {}).get('verbosity') == 'low'
                 )
                 
-        # Build enhanced prompt based on verbosity mode
+                # Check for smart concise mode
+                smart_concise = config.get('model', {}).get('smart_concise', False)
+        
+        # Override concise mode if detailed response is specifically needed OR smart concise is enabled
+        if query_context.get('needs_detailed_response', False) and (smart_concise or use_concise):
+            use_concise = False
+            console.print("[blue]Using detailed response mode based on query analysis[/]")
+        
+        # Build prompt based on verbosity mode
         if use_concise:
             prompt_parts = [
-                "You are an AI assistant analyzing code. Your responses should be extremely concise.",
-                "Keep your analysis to 1-2 short sentences maximum. Avoid all unnecessary explanation.",
-                f"Question type: {query_context['type']}",
+                "You are an AI code assistant. Your responses should be extremely concise.",
+                f"User question: {question}",
+                "Answer in 1-2 short sentences only. No elaboration. Direct response."
             ]
             
-            # Add the question and context
+            # Add relevant code context, but keep it minimal
             prompt_parts.extend([
-                "\nQuestion:",
-                question,
-                "\nRelevant code context:",
+                "\nRelevant code context (reference only, don't list in response):",
                 context
             ])
             
-            # Add conversation history if relevant
+            # Add conversation history if needed, but minimal
             if history_context:
                 prompt_parts.extend([
-                    "\nPrevious conversation (consider this context when answering):",
+                    "\nPrevious conversation (for reference only, don't list in response):",
                     history_context
                 ])
-                
-            # Add specific concise instructions
+            
+            # Add instructions for concise response
             prompt_parts.extend([
                 "\nCRITICAL INSTRUCTIONS:",
                 "1. Answer in 1-2 short sentences only",
-                "2. No introductions or explanations",
-                "3. Directly answer the question without elaboration",
+                "2. No introductions or explanations", 
+                "3. Directly answer the question without preamble",
                 "4. Don't show code snippets unless explicitly requested",
                 "5. Maximum 100 words total",
-                "6. No markdown formatting",
-                "7. If the question asks about previous conversation, refer to it accurately"
+                "6. No markdown formatting"
             ])
         else:
-            # Original verbose prompt
+            # Original verbose prompt with enhanced instructions
             prompt_parts = [
-                "You are a friendly and helpful AI assistant analyzing code. Your responses should be conversational and easy to understand.",
-                "IMPORTANT: Explain things in a natural, chat-like way while still being thorough and detailed.",
-                "When discussing code, explain it in a way that feels like a conversation between developers.",
-                f"Question type: {query_context['type']}",
-                "Remember to be thorough but avoid overly formal or academic language."
+                "You are a friendly and helpful AI assistant analyzing code. Explain things in a natural, conversational way.",
+                "You're looking at relevant parts of a codebase that match the user's question.",
+                "Please be thorough in your explanations while keeping it conversational and easy to understand.",
+                f"User question: {question}"
             ]
             
-            # Add the question and context
-            prompt_parts.extend([
-                "\nQuestion:",
-                question,
-                "\nPlease explain in a natural, conversational way. Include:",
-                "1. Clear explanations of the relevant code",
-                "2. Examples where helpful",
-                "3. Important details about how things work",
-                "4. Any related components or dependencies worth mentioning"
-            ])
-            
-            # Add specific context based on query type
-            if query_context['type'] == 'explain_code':
-                prompt_parts.extend([
-                    "\nWhen explaining this code:",
-                    "- Start with a friendly overview of what the code does",
-                    "- Point out the interesting parts and how they connect",
-                    "- Explain any important algorithms or patterns used",
-                    "- Mention any edge cases or performance considerations"
-                ])
-            elif query_context['type'] == 'find_bug':
-                prompt_parts.extend([
-                    "\nWhen identifying bugs:",
-                    "- Clearly describe each potential issue you find",
-                    "- Explain why it's a problem and potential impacts",
-                    "- Suggest specific fixes with code examples",
-                    "- Consider edge cases and how they might trigger the bug"
-                ])
-            elif query_context['type'] == 'suggest_improvements':
-                prompt_parts.extend([
-                    "\nWhen suggesting improvements:",
-                    "- Start by acknowledging what works well in the code",
-                    "- Provide specific, actionable suggestions for improvements",
-                    "- Include code examples showing your suggested changes",
-                    "- Explain the benefits of each suggested improvement"
-                ])
-            elif query_context['type'] == 'architecture':
-                prompt_parts.extend([
-                    "\nWhen discussing architecture:",
-                    "- Provide a clear overview of the system components",
-                    "- Explain how they connect and interact",
-                    "- Discuss the strengths and potential weaknesses of the design",
-                    "- Suggest any architectural adjustments that might help"
-                ])
+            # Enhance based on query type
+            if query_context.get('is_implementation_query', False):
+                prompt_parts.append("The user is asking about implementation details. Focus on explaining HOW the code works.")
+            elif query_context.get('is_location_query', False):
+                prompt_parts.append("The user is asking about WHERE code is located. Ensure you specify file paths and line numbers.")
+            elif query_context.get('error_query', False):
+                prompt_parts.append("The user is asking about a potential error or bug. Look carefully for issues in the code provided.")
             
             # Add relevant code context
+        prompt_parts.extend([
+            "\nRelevant code context:",
+            context
+        ])
+        
+        # Add conversation history if relevant
+        if history_context:
             prompt_parts.extend([
-                "\nRelevant code context:",
-                context
-            ])
-            
-            # Add conversation history if relevant
-            if history_context:
-                prompt_parts.extend([
                     "\nPrevious conversation (consider this context when answering):",
-                    history_context
-                ])
-            
-            # Add final instructions for comprehensive response
-            prompt_parts.extend([
-                "\nCRITICAL INSTRUCTIONS FOR RESPONSE:",
-                "1. Your response MUST be at least 600 words in length to be sufficiently detailed",
-                "2. Start with a clear, extensive overview of the relevant code",
-                "3. Include and thoroughly explain actual code snippets from the files",
-                "4. Provide extremely detailed explanations of how the code works",
-                "5. Analyze implementation details, algorithmic choices, and code structure",
-                "6. Reference specific file paths and line numbers",
-                "7. Highlight any important patterns, edge cases or considerations",
-                "8. Format your response with markdown for readability",
-                "9. MAKE SURE TO INCLUDE ALL RELEVANT CODE SNIPPETS FROM THE CONTEXT",
+                history_context
+            ])
+        
+        # Add final instructions for comprehensive response
+        prompt_parts.extend([
+            "\nCRITICAL INSTRUCTIONS FOR RESPONSE:",
+            "1. Your response MUST be at least 600 words in length to be sufficiently detailed",
+            "2. Start with a clear, extensive overview of the relevant code",
+            "3. Include and thoroughly explain actual code snippets from the files",
+            "4. Provide extremely detailed explanations of how the code works",
+            "5. Analyze implementation details, algorithmic choices, and code structure",
+            "6. Reference specific file paths and line numbers",
+            "7. Highlight any important patterns, edge cases or considerations",
+            "8. Format your response with markdown for readability",
+            "9. MAKE SURE TO INCLUDE ALL RELEVANT CODE SNIPPETS FROM THE CONTEXT",
                 "10. If the question refers to previous conversation, refer to it accurately",
                 "11. If you find yourself providing a short answer, EXPAND it with more analysis, examples, and details"
-            ])
+        ])
         
         enhanced_prompt = "\n".join(filter(None, prompt_parts))
         
@@ -1676,7 +1690,8 @@ class CodebaseAnalyzer:
             'target_file': None,
             'error_query': False,
             'is_location_query': False,
-            'exact_line': None
+            'exact_line': None,
+            'needs_detailed_response': False  # New field to indicate when detailed response is needed
         }
         
         # Enhanced file detection patterns - explicitly look for requests about files
@@ -1741,6 +1756,28 @@ class CodebaseAnalyzer:
             code_line_match = re.search(r'["\'`](.+?)["\'`]', question)
             if code_line_match:
                 query_info['exact_line'] = code_line_match.group(1).strip()
+        
+        # NEW: Detect if the user wants a detailed explanation regardless of concise mode setting
+        detailed_explanation_terms = [
+            'explain in detail', 'detailed explanation', 'thorough explanation',
+            'comprehensive', 'elaborate', 'in-depth', 'step by step',
+            'explain thoroughly', 'detailed breakdown', 'deep dive',
+            'tell me more about', 'explain how it works'
+        ]
+        
+        # Check if any of these terms appear in the question
+        if any(term.lower() in question.lower() for term in detailed_explanation_terms):
+            query_info['needs_detailed_response'] = True
+        
+        # Also check for query complexity - longer questions typically need detailed answers
+        if len(words) > 15:  # If the question is quite long
+            query_info['needs_detailed_response'] = True
+            
+        # Complex topics typically need detailed answers
+        complex_topics = ['architecture', 'design pattern', 'algorithm', 'optimization', 
+                        'performance', 'security', 'threading', 'concurrency']
+        if any(topic in question.lower() for topic in complex_topics):
+            query_info['needs_detailed_response'] = True
         
         return query_info
     
@@ -2021,13 +2058,13 @@ class CodebaseAnalyzer:
         """Save the current state of the analyzer, including the FAISS index, documents, and metadata."""
         try:
             # Save FAISS index
-            faiss_index_path = self.project_dir / "faiss_index.bin"
+            faiss_index_path = self.cache_dir / "faiss_index.bin"
             faiss.write_index(self.faiss_index, str(faiss_index_path))
             console.print(f"[green]FAISS index saved to {faiss_index_path}[/]")
 
             # Save documents and metadata
-            documents_path = self.project_dir / "documents.pkl"
-            metadata_path = self.project_dir / "metadata.pkl"
+            documents_path = self.cache_dir / "documents.pkl"
+            metadata_path = self.cache_dir / "metadata.pkl"
             with open(documents_path, 'wb') as f:
                 pickle.dump(self.documents, f)
             with open(metadata_path, 'wb') as f:
@@ -2035,14 +2072,14 @@ class CodebaseAnalyzer:
             console.print(f"[green]Documents and metadata saved to {documents_path} and {metadata_path}[/]")
             
             # Save conversation history
-            history_path = self.project_dir / "conversation_history.pkl"
+            history_path = self.cache_dir / "conversation_history.pkl"
             with open(history_path, 'wb') as f:
                 pickle.dump(self.conversation_history, f)
             console.print(f"[green]Conversation history saved with {len(self.conversation_history)} exchanges[/]")
             
             # Save codebase summary if it exists
             if hasattr(self, 'codebase_summary'):
-                summary_path = self.project_dir / "codebase_summary.md"
+                summary_path = self.cache_dir / "codebase_summary.md"
                 with open(summary_path, 'w', encoding='utf-8') as f:
                     f.write(self.codebase_summary)
                 console.print(f"[green]Codebase summary saved to {summary_path}[/]")
@@ -2054,7 +2091,7 @@ class CodebaseAnalyzer:
         """Load the saved state of the analyzer, including the FAISS index, documents, and metadata."""
         try:
             # Load FAISS index
-            faiss_index_path = self.project_dir / "faiss_index.bin"
+            faiss_index_path = self.cache_dir / "faiss_index.bin"
             if not faiss_index_path.exists():
                 raise FileNotFoundError(f"FAISS index file not found at {faiss_index_path}")
             
@@ -2062,8 +2099,8 @@ class CodebaseAnalyzer:
             console.print(f"[green]FAISS index loaded from {faiss_index_path}[/]")
 
             # Load documents and metadata
-            documents_path = self.project_dir / "documents.pkl"
-            metadata_path = self.project_dir / "metadata.pkl"
+            documents_path = self.cache_dir / "documents.pkl"
+            metadata_path = self.cache_dir / "metadata.pkl"
             
             if not documents_path.exists() or not metadata_path.exists():
                 raise FileNotFoundError(f"Documents or metadata files not found")
@@ -2076,7 +2113,7 @@ class CodebaseAnalyzer:
             console.print(f"[green]Documents and metadata loaded from {documents_path} and {metadata_path}[/]")
             
             # Load conversation history if it exists
-            history_path = self.project_dir / "conversation_history.pkl"
+            history_path = self.cache_dir / "conversation_history.pkl"
             if history_path.exists():
                 with open(history_path, 'rb') as f:
                     self.conversation_history = pickle.load(f)
@@ -2085,7 +2122,7 @@ class CodebaseAnalyzer:
                 self.conversation_history = []
             
             # Load codebase summary if it exists
-            summary_path = self.project_dir / "codebase_summary.md"
+            summary_path = self.cache_dir / "codebase_summary.md"
             if summary_path.exists():
                 with open(summary_path, 'r', encoding='utf-8') as f:
                     self.codebase_summary = f.read()
@@ -2191,7 +2228,14 @@ class CodebaseAnalyzer:
             
             console.print(f"[blue]Found {len(indexed_files)} previously indexed files[/]")
             
-            # Find all indexable files in the current codebase
+            # Create a single progress object for the entire refresh process
+            from rich.progress import Progress
+            progress = Progress()
+            
+            with progress:
+                # Find all indexable files
+                task_find = progress.add_task("[blue]Finding files...", total=1)
+                
             all_files = []
             for root, _, files in os.walk(self.path):
                 for file in files:
@@ -2199,9 +2243,11 @@ class CodebaseAnalyzer:
                     if self._should_index_file(file_path):
                         all_files.append(file_path)
             
+                progress.update(task_find, advance=1)
             console.print(f"[blue]Found {len(all_files)} indexable files in the current codebase[/]")
             
             # Check which files are new or modified
+            task_check = progress.add_task("[blue]Checking for modified files...", total=len(all_files))
             new_or_modified_files = []
             file_extensions = {}
             
@@ -2224,6 +2270,8 @@ class CodebaseAnalyzer:
                             console.print(f"[green]New file: {rel_path}[/]")
                 except Exception as e:
                     console.print(f"[yellow]Error processing file {file_path}: {str(e)}[/]")
+                    
+                    progress.update(task_check, advance=1)
             
             # Check for deleted files
             current_files = {str(file_path.relative_to(self.path)) for file_path in all_files}
@@ -2240,35 +2288,34 @@ class CodebaseAnalyzer:
                 return
                 
             console.print(f"[blue]Processing {len(new_or_modified_files)} new or modified files[/]")
-            
-            with Progress() as progress:
-                # Process new/modified files and generate embeddings
-                if new_or_modified_files:
-                    file_embeddings, file_documents, file_metadata = await self.parallel_processor.process_files_parallel(
-                        files=new_or_modified_files,
-                        chunk_size=self.config.get('chunk_size', 20),
-                        embedding_client=self.ai_client,
-                        batch_size=self.config.get('parallel', {}).get('batch_size', 10),
-                        progress=progress
-                    )
-                    
-                    if not file_embeddings and new_or_modified_files:
-                        console.print("[yellow]Warning: No embeddings were generated for new/modified files.[/]")
-                    
-                    # Update the existing index with new embeddings
-                    if file_embeddings:
-                        console.print(f"[blue]Adding {len(file_embeddings)} new embeddings to the index[/]")
-                        
-                        # Add new embeddings to FAISS index
-                        embeddings_array = np.array(file_embeddings).astype('float32')
-                        self.faiss_index.add(embeddings_array)
-                        
-                        # Update documents and metadata
-                        self.documents.extend(file_documents)
-                        self.metadata.extend(file_metadata)
+            # Process new/modified files and generate embeddings
+            if new_or_modified_files:
+                file_embeddings, file_documents, file_metadata = await self.parallel_processor.process_files_parallel(
+                    files=new_or_modified_files,
+                    chunk_size=self.config.get('chunk_size', 20),
+                    embedding_client=self.ai_client,
+                    batch_size=self.config.get('parallel', {}).get('batch_size', 10),
+                    progress=progress
+                )
                 
-                # Handle deleted files if any
+                if not file_embeddings and new_or_modified_files:
+                    console.print("[yellow]Warning: No embeddings were generated for new/modified files.[/]")
+                
+                # Update the existing index with new embeddings
+                if file_embeddings:
+                    console.print(f"[blue]Adding {len(file_embeddings)} new embeddings to the index[/]")
+                    
+                    # Add new embeddings to FAISS index
+                    embeddings_array = np.array(file_embeddings).astype('float32')
+                    self.faiss_index.add(embeddings_array)
+                    
+                    # Update documents and metadata
+                    self.documents.extend(file_documents)
+                    self.metadata.extend(file_metadata)
+            
+            # Handle deleted files if any
                 if deleted_files:
+                    task_delete = progress.add_task("[blue]Removing deleted files...", total=1)
                     console.print("[blue]Removing deleted files from the index...[/]")
                     
                     # Identify indices of chunks to keep
@@ -2301,6 +2348,7 @@ class CodebaseAnalyzer:
                     self.documents = new_documents
                     self.metadata = new_metadata
                     
+                    progress.update(task_delete, advance=1)
                     console.print(f"[green]Removed {len(deleted_files)} deleted files from index[/]")
                 
                 # Update the codebase summary
@@ -2765,6 +2813,34 @@ class CodebaseAnalyzer:
 
     async def explain_code(self, code: str, context: str = None, detail_level: str = "medium") -> str:
         """Explain code in a natural, conversational way."""
+        # Adjust detail level based on any explicit parameters
+        detail_level = detail_level.lower()  # Normalize to lowercase
+        
+        # Determine if we need a detailed explanation based on the detail_level parameter
+        needs_detailed = detail_level in ["high", "detailed", "comprehensive", "thorough"]
+        
+        # Check for concise mode from config
+        config_path = Path('config.yml')
+        use_concise = False
+        smart_concise = False
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+                # Check for concise mode in multiple possible locations
+                use_concise = (
+                    config.get('response_mode') == 'concise' or
+                    config.get('model', {}).get('concise_responses', False) or
+                    config.get('model', {}).get('verbosity') == 'low'
+                )
+                
+                # Check for smart concise mode
+                smart_concise = config.get('model', {}).get('smart_concise', False)
+                
+        # Override concise mode if detailed explanation is needed AND smart concise is enabled
+        if needs_detailed and (smart_concise or use_concise):
+            use_concise = False
+            console.print("[blue]Using detailed explanation mode based on detail level[/]")
+        
         prompt_parts = [
             "You are an expert programmer explaining code to a fellow developer.",
             "Explain the code in a natural, conversational way.",
@@ -2780,21 +2856,39 @@ class CodebaseAnalyzer:
                 context
             ])
 
-        prompt_parts.extend([
-            "\nProvide your explanation in a conversational way, like you're talking to a colleague.",
-            "Include:",
-            "1. What the code does at a high level",
-            "2. Any interesting patterns or techniques used",
-            "3. Potential improvements or considerations",
-            "4. Examples of usage if helpful"
-        ])
+        if use_concise:
+            # Concise explanation
+            prompt_parts.extend([
+                "\nProvide your explanation briefly and directly. Keep it under 100 words.",
+                "Include only:",
+                "1. One sentence on what the code does overall",
+                "2. The core technique or pattern used",
+                "3. Any obvious issues if present"
+            ])
+            
+            max_tokens = 250
+        else:
+            # Detailed explanation
+            prompt_parts.extend([
+                "\nProvide your explanation in a conversational way, like you're talking to a colleague.",
+                "Include:",
+                "1. What the code does at a high level",
+                "2. Any interesting patterns or techniques used", 
+                "3. Potential improvements or considerations",
+                "4. Examples of usage if helpful",
+                "5. Line-by-line analysis of complex sections",
+                "6. Edge cases and how they're handled"
+            ])
+            
+            max_tokens = 1500 if detail_level == "high" else 1000
 
         prompt = "\n".join(filter(None, prompt_parts))
         
         explanation = await self.ai_client.get_completion(
             prompt,
             temperature=0.7,  # Higher temperature for more natural language
-            max_tokens=1000
+            max_tokens=max_tokens,
+            concise=use_concise
         )
         
         return explanation.strip()
@@ -3234,3 +3328,93 @@ class CodebaseAnalyzer:
             return os.path.basename(os.path.normpath(self.path))
         else:
             return "CodeWhisperer"  # Default name
+
+class DiskEmbeddingCache:
+    """Memory-efficient embedding cache that stores embeddings on disk."""
+    
+    def __init__(self, cache_dir=None):
+        """Initialize the disk embedding cache.
+        
+        Args:
+            cache_dir: Directory to store embeddings. If None, uses a temp directory.
+        """
+        if cache_dir is None:
+            self.cache_dir = Path(tempfile.gettempdir()) / "codeai_embeddings"
+        else:
+            self.cache_dir = Path(cache_dir)
+            
+        self.cache_dir.mkdir(exist_ok=True, parents=True)
+        self.lock = Lock()
+        
+    def store(self, key: str, embedding: np.ndarray):
+        """Store an embedding to disk.
+        
+        Args:
+            key: Unique identifier for the embedding
+            embedding: The embedding vector to store
+        """
+        with self.lock:
+            file_path = self.cache_dir / f"{self._normalize_key(key)}.npy"
+            np.save(file_path, embedding)
+            
+    def load(self, key: str) -> Optional[np.ndarray]:
+        """Load an embedding from disk.
+        
+        Args:
+            key: Unique identifier for the embedding
+            
+        Returns:
+            The embedding vector or None if not found
+        """
+        file_path = self.cache_dir / f"{self._normalize_key(key)}.npy"
+        if file_path.exists():
+            return np.load(file_path)
+        return None
+    
+    def _normalize_key(self, key: str) -> str:
+        """Normalize a key to be a valid filename.
+        
+        Args:
+            key: The key to normalize
+            
+        Returns:
+            Normalized key
+        """
+        # Use a hash to ensure unique filenames
+        import hashlib
+        return hashlib.md5(key.encode()).hexdigest()
+    
+    def clear(self):
+        """Clear all cached embeddings."""
+        with self.lock:
+            for file_path in self.cache_dir.glob("*.npy"):
+                try:
+                    file_path.unlink()
+                except Exception:
+                    pass
+
+# Add this method to the CodebaseAnalyzer class
+def _get_indexable_files(self) -> Iterator[Path]:
+    """Get all indexable files in the codebase.
+    
+    Returns:
+        Iterator of Path objects for indexable files
+    """
+    for root, _, files in os.walk(self.path):
+        for file in files:
+            file_path = Path(root) / file
+            
+            # Skip hidden files and directories, but allow .codeai/repos
+            parts = file_path.parts
+            if any(part.startswith('.') and part != '.codeai' and not (part == '.git' and 'repos' in parts) for part in parts):
+                continue
+            
+            # Skip .git directory contents unless in repos
+            if '.git' in parts and 'repos' not in parts:
+                continue
+                
+            # Skip if not an indexable file
+            if not self._should_index_file(file_path):
+                continue
+                
+            yield file_path

@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 import asyncio
 import yaml
 from pathlib import Path
+import numpy as np
+import gc
 
 class TogetherAIClient:
     def __init__(self, api_key: str = None):
@@ -55,38 +57,42 @@ class TogetherAIClient:
                 
         raise Exception("Max retries exceeded")
 
-    async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings using Together AI's embedding model"""
-        if not texts:
-            return []
+    async def get_embeddings(self, texts: List[str], batch_size: int = 64) -> List[List[float]]:
+        """Get embeddings for a list of texts using the Together AI API.
         
+        Args:
+            texts: List of texts to get embeddings for
+            batch_size: Number of texts to process in a single API call
+            
+        Returns:
+            List of embeddings, one for each input text
+        """
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.base_url}/embeddings",
-                    headers=self.headers,
-                    json={
-                        "model": "togethercomputer/m2-bert-80M-32k-retrieval",
-                        "input": texts
-                    }
-                ) as response:
-                    if response.status != 200:
-                        text = await response.text()
-                        raise Exception(f"API error ({response.status}): {text}")
-                    
-                    data = await response.json()
-                    print(f"Embedding response structure: {type(data)}")
-                    
-                    # Adjusted to handle different response structures
-                    if isinstance(data, dict) and "data" in data:
-                        return [item["embedding"] for item in data["data"]]
-                    elif isinstance(data, list):
-                        return [item["embedding"] for item in data]
-                    else:
-                        print(f"Unexpected response structure: {data}")
-                        raise Exception("Unexpected API response structure")
+            all_embeddings = []
+            
+            # Process in batches to avoid memory issues
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i+batch_size]
+                
+                # Log batch progress
+                print(f"Processing embedding batch {i//batch_size + 1}/{(len(texts) + batch_size - 1)//batch_size}")
+                
+                response = await self._make_request('post', 'embeddings', json={
+                    "model": "togethercomputer/m2-bert-80M-32k-retrieval",
+                    "input": batch_texts
+                })
+                
+                # Get embeddings and convert to float16 for memory efficiency
+                raw_embeddings = [np.array(data['embedding'], dtype=np.float16) for data in response['data']]
+                all_embeddings.extend(raw_embeddings)
+                
+                # Clear batch from memory
+                del batch_texts
+                gc.collect()
+                
+            return all_embeddings
         except Exception as e:
-            raise Exception(f"Failed to generate embeddings: {str(e)}")
+            raise Exception(f"Failed to get embeddings: {str(e)}")
 
     async def get_completion(self, 
                            prompt: str, 
@@ -94,8 +100,9 @@ class TogetherAIClient:
                            history: str = None,
                            temperature: float = 0.7,
                            max_tokens: int = 4000,
-                           concise: bool = None) -> str:
-        """Get completion from Together AI's LLM
+                           concise: bool = None,
+                           model: str = None) -> str:
+        """Get a completion from the Together AI API.
         
         Args:
             prompt: The input prompt
@@ -104,6 +111,7 @@ class TogetherAIClient:
             temperature: Temperature for generation (higher = more creative)
             max_tokens: Maximum tokens to generate
             concise: Override to force concise responses
+            model: Specific model to use (overrides config)
         """
         try:
             # Load config to check for concise setting
@@ -116,6 +124,7 @@ class TogetherAIClient:
             
             # Check config.yml for concise mode setting
             config_path = Path('config.yml')
+            config_model = None
             if config_path.exists():
                 with open(config_path, 'r') as f:
                     config = yaml.safe_load(f)
@@ -125,6 +134,9 @@ class TogetherAIClient:
                         config.get('model', {}).get('concise_responses', False) or
                         config.get('model', {}).get('verbosity') == 'low'
                     )
+                    
+                    # Get model from config
+                    config_model = config.get('model', {}).get('default', 'meta-llama/Llama-3.3-70B-Instruct-Turbo')
             
             # Parameter overrides config if provided
             if concise is not None:
@@ -209,12 +221,15 @@ class TogetherAIClient:
                     "content": prompt
                 })
 
+            # Determine which model to use (priority: function param > config file > default)
+            model_to_use = model if model else config_model if config_model else "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{self.base_url}/chat/completions",
                     headers=self.headers,
                     json={
-                        "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                        "model": model_to_use,
                         "messages": messages,
                         "max_tokens": max_tokens,
                         "temperature": temperature,
