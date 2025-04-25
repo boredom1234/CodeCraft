@@ -660,7 +660,7 @@ class CodebaseAnalyzer:
             padding=(1, 1)
         )
 
-    def _format_output(self, text: str, title: str = "Code Analysis Report"):
+    def _format_output(self, text: str, title: str = "AI Response"):
         """Format text using a simple, conversational style"""
         try:
             # For longer responses, split the text into chunks to avoid console truncation
@@ -3327,7 +3327,7 @@ class CodebaseAnalyzer:
             # If no project name is set, use the directory name
             return os.path.basename(os.path.normpath(self.path))
         else:
-            return "CodeWhisperer"  # Default name
+            return "CodeCraft"  # Default name
 
 class DiskEmbeddingCache:
     """Memory-efficient embedding cache that stores embeddings on disk."""

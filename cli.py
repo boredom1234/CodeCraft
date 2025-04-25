@@ -102,7 +102,6 @@ def handle_cli_errors(f):
 
 # Apply to CLI commands
 @cli.command()
-@handle_cli_errors
 def configure():
     """Configure API keys and settings
 
@@ -110,8 +109,17 @@ def configure():
     settings for the application. It will prompt you to enter your Together AI
     API key if it's not already set.
     """
-    api_key = setup_together_api()
-    console.print("[green]Configuration saved successfully![/]")
+    try:
+        api_key = setup_together_api()
+        console.print("[green]Configuration saved successfully![/]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Operation cancelled by user[/]")
+        exit(0)
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/]")
+        if os.getenv("DEBUG"):
+            traceback.print_exc()
+        exit(1)
 
 def load_config() -> dict:
     """Load configuration from config.yml file."""

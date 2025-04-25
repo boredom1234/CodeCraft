@@ -1,4 +1,4 @@
-# CodeWhisperer
+# CodeCraft
 
 <div align="center">
   <img src="logo.jpg" alt="AI Codebase Reviewer Logo" width="200">
@@ -32,8 +32,8 @@ A powerful AI-powered code review assistant that provides real-time feedback on 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/boredom1234/CodeWhisperer.git
-cd CodeWhisperer
+git clone https://github.com/boredom1234/CodeCraft.git
+cd CodeCraft
 ```
 
 2. Create and activate a virtual environment:

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-Test script for demonstrating concise mode in CodeWhisperer.
+Test script for demonstrating concise mode in CodeCraft.
 
 This script shows the difference between verbose and concise responses
-from the CodeWhisperer assistant.
+from the CodeCraft assistant.
 """
 
 import argparse
@@ -16,7 +16,7 @@ import time
 
 def test_concise_mode():
     """Test and demonstrate concise mode functionality."""
-    # Check if CodeWhisperer is properly installed
+    # Check if CodeCraft is properly installed
     try:
         result = subprocess.run(
             ["python", "cli.py", "--help"],
@@ -24,9 +24,9 @@ def test_concise_mode():
             text=True,
             check=True
         )
-        print("CodeWhisperer installation verified")
+        print("CodeCraft installation verified")
     except subprocess.CalledProcessError as e:
-        print(f"ERROR: CodeWhisperer CLI not working properly: {e}")
+        print(f"ERROR: CodeCraft CLI not working properly: {e}")
         print(e.stdout)
         print(e.stderr)
         sys.exit(1)
@@ -132,7 +132,7 @@ def test_concise_mode():
     print("\nTest completed. Original configuration restored.")
 
 def main():
-    parser = argparse.ArgumentParser(description="Test CodeWhisperer's concise mode functionality")
+    parser = argparse.ArgumentParser(description="Test CodeCraft's concise mode functionality")
     parser.add_argument('--run', action='store_true', help='Run the concise mode test')
     
     args = parser.parse_args()

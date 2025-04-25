@@ -1,6 +1,6 @@
-# Contributing to CodeWhisperer
+# Contributing to CodeCraft
 
-Thank you for your interest in contributing to CodeWhisperer! This document provides guidelines and instructions for contributing to this project. By participating, you are expected to uphold this code and help us create a positive and collaborative environment.
+Thank you for your interest in contributing to CodeCraft! This document provides guidelines and instructions for contributing to this project. By participating, you are expected to uphold this code and help us create a positive and collaborative environment.
 
 ## Table of Contents
 - [Code of Conduct](#code-of-conduct)
@@ -53,8 +53,8 @@ Project maintainers are responsible for clarifying the standards of acceptable b
 1. Fork the repository on GitHub
 2. Clone your fork locally:
    ```bash
-   git clone https://github.com/YOUR-USERNAME/CodeWhisperer.git
-   cd CodeWhisperer
+   git clone https://github.com/YOUR-USERNAME/CodeCraft.git
+   cd CodeCraft
    ```
 
 3. Create a virtual environment and activate it:
@@ -214,4 +214,4 @@ If you have questions or need help, you can:
 
 ---
 
-Thank you for contributing to CodeWhisperer! Your efforts help make this project better for everyone. 
+Thank you for contributing to CodeCraft! Your efforts help make this project better for everyone. 
