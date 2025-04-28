@@ -8,6 +8,7 @@ import yaml
 from pathlib import Path
 import numpy as np
 import gc
+import tiktoken  # Import tiktoken for token counting
 
 class TogetherAIClient:
     def __init__(self, api_key: str = None):
@@ -25,6 +26,8 @@ class TogetherAIClient:
         self.base_url = "https://api.together.xyz/v1"
         self.max_retries = 3
         self.retry_delay = 1  # seconds
+        self.max_token_limit = 131000  # Set maximum token limit for API (slightly below the actual 131073 limit)
+        self.tokenizer = tiktoken.get_encoding("cl100k_base")  # Use appropriate tokenizer
 
     async def _make_request(self, method: str, endpoint: str, **kwargs) -> dict:
         """Make API request with retry logic"""
@@ -56,6 +59,21 @@ class TogetherAIClient:
                 await asyncio.sleep(self.retry_delay * (attempt + 1))
                 
         raise Exception("Max retries exceeded")
+
+    def count_tokens(self, text: str) -> int:
+        """Count the number of tokens in a text string."""
+        return len(self.tokenizer.encode(text))
+    
+    def count_message_tokens(self, messages: List[Dict]) -> int:
+        """Count tokens in a list of chat messages."""
+        total_tokens = 0
+        for message in messages:
+            # Add tokens for message role and content
+            total_tokens += self.count_tokens(message.get("role", ""))
+            total_tokens += self.count_tokens(message.get("content", ""))
+            # Add a small overhead for message formatting
+            total_tokens += 4  # Approximate overhead per message
+        return total_tokens
 
     async def get_embeddings(self, texts: List[str], batch_size: int = 64) -> List[List[float]]:
         """Get embeddings for a list of texts using the Together AI API.
@@ -210,17 +228,69 @@ class TogetherAIClient:
                         messages.append({"role": "assistant", "content": assistant_content})
             
             # Add the current context and question
+            current_content = ""
             if context:
-                messages.append({
-                    "role": "user",
-                    "content": f"Context from the codebase:\n{context}\n\nQuestion: {prompt}"
-                })
+                current_content = f"Context from the codebase:\n{context}\n\nQuestion: {prompt}"
             else:
-                messages.append({
-                    "role": "user",
-                    "content": prompt
-                })
-
+                current_content = prompt
+            
+            # Check token count and potentially truncate context if needed
+            current_message = {"role": "user", "content": current_content}
+            
+            # Count tokens in existing messages
+            existing_tokens = self.count_message_tokens(messages)
+            current_tokens = self.count_message_tokens([current_message])
+            
+            print(f"Existing message tokens: {existing_tokens}")
+            print(f"Current message tokens: {current_tokens}")
+            
+            # Check if we need to truncate the context to fit within token limits
+            if existing_tokens + current_tokens + max_tokens > self.max_token_limit:
+                print(f"Token count exceeds limit: {existing_tokens + current_tokens + max_tokens} > {self.max_token_limit}")
+                
+                # If we have context, try to truncate it
+                if context:
+                    # Try to preserve the question while reducing context
+                    # Gradually reduce context until we fit within the limit
+                    max_context_tokens = self.max_token_limit - existing_tokens - max_tokens - 100  # Buffer of 100 tokens
+                    
+                    # Start by cutting the context in half
+                    reduced_context = context[:len(context)//2]
+                    truncation_message = "\n[Note: Context has been truncated due to token limits]"
+                    
+                    # Create a new message with truncated context
+                    new_content = f"Context (truncated):\n{reduced_context}{truncation_message}\n\nQuestion: {prompt}"
+                    
+                    # If still too long, truncate more aggressively
+                    while self.count_tokens(new_content) > max_context_tokens and len(reduced_context) > 100:
+                        reduced_context = reduced_context[:len(reduced_context)//2]
+                        new_content = f"Context (truncated):\n{reduced_context}{truncation_message}\n\nQuestion: {prompt}"
+                    
+                    current_content = new_content
+                    print(f"Truncated context to {len(reduced_context)} chars, {self.count_tokens(new_content)} tokens")
+                else:
+                    # If we don't have context to truncate, we'll need to truncate the prompt
+                    max_prompt_tokens = self.max_token_limit - existing_tokens - max_tokens - 50  # Buffer of 50 tokens
+                    if self.count_tokens(prompt) > max_prompt_tokens:
+                        # Truncate the prompt to fit
+                        truncated_tokens = self.tokenizer.encode(prompt)[:max_prompt_tokens]
+                        prompt = self.tokenizer.decode(truncated_tokens)
+                        current_content = f"{prompt}\n[Note: Query has been truncated due to token limits]"
+                        print(f"Truncated prompt to {len(prompt)} chars, {self.count_tokens(prompt)} tokens")
+            
+            # Add the final content to messages
+            messages.append({"role": "user", "content": current_content})
+            
+            # Final token count check
+            final_token_count = self.count_message_tokens(messages) + max_tokens
+            print(f"Final token count: {final_token_count}")
+            
+            if final_token_count > self.max_token_limit:
+                # If still too large, adjust max_tokens as a last resort
+                adjusted_max_tokens = self.max_token_limit - self.count_message_tokens(messages) - 10
+                print(f"Had to reduce max_tokens from {max_tokens} to {adjusted_max_tokens}")
+                max_tokens = max(adjusted_max_tokens, 50)  # Minimum of 50 tokens for output
+            
             # Determine which model to use (priority: function param > config file > default)
             model_to_use = model if model else config_model if config_model else "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 
@@ -248,15 +318,9 @@ class TogetherAIClient:
                     
                     # Handle response
                     if isinstance(data, dict) and "choices" in data:
-                        response_content = data["choices"][0]["message"]["content"]
-                        # Check if response is suspiciously short
-                        if len(response_content.split()) < 100:
-                            print(f"Warning: Generated response is unusually short ({len(response_content.split())} words)")
-                        return response_content
+                        return data["choices"][0]["message"]["content"]
                     else:
-                        print(f"Unexpected response structure: {data}")
-                        raise Exception("Unexpected API response structure")
+                        raise Exception(f"Unexpected response format: {data}")
+            
         except Exception as e:
-            error_msg = f"Failed to get completion: {str(e)}"
-            print(error_msg)  # Print directly for debugging
-            raise Exception(error_msg)
+            raise Exception(f"Failed to get completion: {str(e)}")

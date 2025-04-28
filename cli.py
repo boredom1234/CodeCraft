@@ -363,7 +363,8 @@ def ask(interactive: bool, composer: bool = False, chunks: int = None, reset: bo
                         else:
                             response = await analyzer.query(question, chunks, model=model)
                 
-                print(f"\n{response}\n")
+                # Display the response to the user
+                console.print(f"\n{response}\n")
                 
                 # Save analyzer state to persist conversation history
                 save_analyzer_state(analyzer)

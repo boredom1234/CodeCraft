@@ -7,4 +7,5 @@ python-dotenv
 numpy
 gitpython
 requests
-aiohttp 
+aiohttp
+tiktoken 

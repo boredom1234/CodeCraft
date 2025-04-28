@@ -681,7 +681,7 @@ class CodebaseAnalyzer:
             else:
                 # For shorter responses, just print with a simple header
                 self.console.print(f"\n{title}\n{'=' * len(title)}")
-            self.console.print(text)
+                self.console.print(text)
                 
         except Exception as e:
             self.console.print(f"[bold red]Error formatting output:[/] {str(e)}")
@@ -1561,8 +1561,7 @@ class CodebaseAnalyzer:
                 max_tokens=4000
             )
         
-        # Format the response for display
-        self._format_output(response)
+        # Removed the call to _format_output(response) to prevent double printing
         
         return response
         
@@ -1620,8 +1619,9 @@ class CodebaseAnalyzer:
             }
         })
         
-        # Debug info
-        print(f"Conversation history saved with {len(self.conversation_history)} exchanges")
+        # Debug info - only print if debug mode is enabled
+        if self.config.get('debug', False):
+            console.print(f"[dim]Conversation history saved with {len(self.conversation_history)} exchanges[/]")
 
     def _prepare_filtered_history(self, question: str, query_context: Dict) -> str:
         """Prepare relevant conversation history based on current query context."""
@@ -2057,10 +2057,13 @@ class CodebaseAnalyzer:
     def save_state(self):
         """Save the current state of the analyzer, including the FAISS index, documents, and metadata."""
         try:
+            debug_mode = self.config.get('debug', False)
+            
             # Save FAISS index
             faiss_index_path = self.cache_dir / "faiss_index.bin"
             faiss.write_index(self.faiss_index, str(faiss_index_path))
-            console.print(f"[green]FAISS index saved to {faiss_index_path}[/]")
+            if debug_mode:
+                console.print(f"[dim]FAISS index saved to {faiss_index_path}[/]")
 
             # Save documents and metadata
             documents_path = self.cache_dir / "documents.pkl"
@@ -2069,20 +2072,23 @@ class CodebaseAnalyzer:
                 pickle.dump(self.documents, f)
             with open(metadata_path, 'wb') as f:
                 pickle.dump(self.metadata, f)
-            console.print(f"[green]Documents and metadata saved to {documents_path} and {metadata_path}[/]")
+            if debug_mode:
+                console.print(f"[dim]Documents and metadata saved[/]")
             
             # Save conversation history
             history_path = self.cache_dir / "conversation_history.pkl"
             with open(history_path, 'wb') as f:
                 pickle.dump(self.conversation_history, f)
-            console.print(f"[green]Conversation history saved with {len(self.conversation_history)} exchanges[/]")
+            if debug_mode:
+                console.print(f"[dim]Conversation history saved with {len(self.conversation_history)} exchanges[/]")
             
             # Save codebase summary if it exists
             if hasattr(self, 'codebase_summary'):
                 summary_path = self.cache_dir / "codebase_summary.md"
                 with open(summary_path, 'w', encoding='utf-8') as f:
                     f.write(self.codebase_summary)
-                console.print(f"[green]Codebase summary saved to {summary_path}[/]")
+                if debug_mode:
+                    console.print(f"[dim]Codebase summary saved[/]")
         except Exception as e:
             console.print(f"[bold red]Error saving state: {str(e)}[/]")
             traceback.print_exc()
@@ -2090,13 +2096,16 @@ class CodebaseAnalyzer:
     def load_state(self):
         """Load the saved state of the analyzer, including the FAISS index, documents, and metadata."""
         try:
+            debug_mode = self.config.get('debug', False)
+            
             # Load FAISS index
             faiss_index_path = self.cache_dir / "faiss_index.bin"
             if not faiss_index_path.exists():
                 raise FileNotFoundError(f"FAISS index file not found at {faiss_index_path}")
             
             self.faiss_index = faiss.read_index(str(faiss_index_path))
-            console.print(f"[green]FAISS index loaded from {faiss_index_path}[/]")
+            if debug_mode:
+                console.print(f"[dim]FAISS index loaded[/]")
 
             # Load documents and metadata
             documents_path = self.cache_dir / "documents.pkl"
@@ -2110,14 +2119,16 @@ class CodebaseAnalyzer:
             with open(metadata_path, 'rb') as f:
                 self.metadata = pickle.load(f)
                 
-            console.print(f"[green]Documents and metadata loaded from {documents_path} and {metadata_path}[/]")
+            if debug_mode:
+                console.print(f"[dim]Documents and metadata loaded[/]")
             
             # Load conversation history if it exists
             history_path = self.cache_dir / "conversation_history.pkl"
             if history_path.exists():
                 with open(history_path, 'rb') as f:
                     self.conversation_history = pickle.load(f)
-                console.print(f"[green]Conversation history loaded with {len(self.conversation_history)} exchanges[/]")
+                if debug_mode:
+                    console.print(f"[dim]Conversation history loaded with {len(self.conversation_history)} exchanges[/]")
             else:
                 self.conversation_history = []
             
@@ -2126,7 +2137,8 @@ class CodebaseAnalyzer:
             if summary_path.exists():
                 with open(summary_path, 'r', encoding='utf-8') as f:
                     self.codebase_summary = f.read()
-                console.print(f"[green]Codebase summary loaded from {summary_path}[/]")
+                if debug_mode:
+                    console.print(f"[dim]Codebase summary loaded[/]")
             else:
                 self.codebase_summary = "# Codebase Summary\n\nNo detailed summary available."
                 
